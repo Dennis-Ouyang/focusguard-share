@@ -83,6 +83,11 @@
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const safeURL = u => (typeof u === 'string' && /^https:\/\//.test(u) ? u : '');
 
+  /* access password: kept for this tab only, sent with every call */
+  const pwKey = `fg-pw-${code}`;
+  const sharePassword = () => { try { return sessionStorage.getItem(pwKey) || null; } catch (e) { return S.pw || null; } };
+  const setPassword = v => { S.pw = v; try { v ? sessionStorage.setItem(pwKey, v) : sessionStorage.removeItem(pwKey); } catch (e) {} };
+
   /* ---------- backend ---------- */
   async function rpc(fn, args) {
     const r = await fetch(`${CFG.url}/rest/v1/rpc/${fn}`, {
@@ -100,7 +105,8 @@
     if (loading) return loading;
     loading = (async () => {
       try {
-        const d = await rpc('fg_get_share', { p_code: code, p_visitor_key: visitorKey });
+        const d = await rpc('fg_get_share', { p_code: code, p_visitor_key: visitorKey, p_password: sharePassword(), p_visitor: S.visitor || null });
+        if (d && d.status === 'locked' && sharePassword()) setPassword('');
         if (d && d.now) skew = Date.parse(d.now) - Date.now();
         if (d && d.snapshot && d.snapshot.tz) TZ = d.snapshot.tz;
         S.data = d; S.loaded = true; S.error = '';
@@ -178,12 +184,15 @@
   function compute(d) {
     if (!d) return { key: 'loading' };
     if (d.status === 'missing') return { key: 'missing', owner: {} };
-    if (d.status === 'expired') return { key: 'ended', owner: d.owner || {} };
+    if (d.status === 'expired') return { key: 'ended', owner: d.owner || {}, once: d.scope === 'once' };
+    if (d.status === 'locked') return { key: 'locked', owner: d.owner || {}, once: d.scope === 'once', pwLen: d.pw_len || 4,
+      lockedUntil: ms(d.locked_until), wrong: !!d.wrong };
     const snap = d.snapshot;
     const owner = d.owner || {};
     const now = nowMs();
     const base = { owner, expires: ms(d.expires_at), perms: { task: true, log: true, shots: true, acts: false }, sessions: [], current: null, fails: [] };
     if (!snap || !(ms(snap.dayEnd) > now)) {
+      if (d.scope === 'once') return { ...base, key: 'ended', once: true };
       return { ...base, key: 'empty', dayStart: now, dayEnd: now + 864e5, upd: null, perms: (snap && snap.perms) || base.perms };
     }
     const perms = Object.assign({}, base.perms, snap.perms || {});
@@ -199,6 +208,7 @@
     if (key === 'rest' && snap.restEndsAt && ms(snap.restEndsAt) < now) key = 'idle';
     if (!STATES[key]) key = 'idle';
     if (key === 'idle' && !sessions.length) key = 'empty';
+    const once = d.scope === 'once';
     let current = null;
     if (snap.current && ['focus', 'pause', 'offline'].includes(key)) {
       const c = snap.current, s = ms(c.start);
@@ -215,7 +225,19 @@
         checks: toChecks(c.checks, fails)
       };
     }
-    return { ...base, key, perms, sessions, current, fails: Object.values(fails), upd, dayStart: ms(snap.dayStart), dayEnd: ms(snap.dayEnd), lastEnd: ms(snap.lastEnd) };
+    let shown = sessions, roundEnded = false;
+    if (once) {
+      // a single-round share shows only its round: live while it runs, then the end page until the link expires
+      if (current && current.id === d.session_id) shown = [];
+      else {
+        const round = sessions.find(x => x.id === d.session_id);
+        if (!round) return { ...base, key: 'ended', once: true };
+        shown = [round]; current = null; key = 'rest'; roundEnded = true;
+      }
+    }
+    const roundStart = once ? (current ? current.s : shown[0].s) : null;
+    return { ...base, key, perms, sessions: shown, current, fails: Object.values(fails), upd, dayStart: ms(snap.dayStart), dayEnd: ms(snap.dayEnd),
+      lastEnd: ms(snap.lastEnd), once, roundEnded, roundStart };
   }
   const taskName = (t, perms) => (!perms.task || !t) ? null : t;
   const realFails = list => list.filter(c => !c.ok && !c.fail.excused);
@@ -500,7 +522,9 @@
   }
   // fit the whole round as of this moment: from its start to whichever is later, the projected end or now
   const fitRange = () => { const end = Math.max(VD.projEnd, VD.current ? VD.nowSec : VD.start), pad = (end - VD.start) * .14; return [VD.start - pad, end + pad]; };
-  const vpBounds = () => [VD.day0, Math.min(VD.day1, Math.max(VD.projEnd, VD.nowSec) + 3600)];
+  // a single-round share only ever shows that round, with a little air on both sides
+  const vpBounds = () => VD.v.once ? [VD.start - 900, Math.max(VD.projEnd, VD.current ? VD.nowSec : VD.projEnd) + 900]
+    : [VD.day0, Math.min(VD.day1, Math.max(VD.projEnd, VD.nowSec) + 3600)];
   function clampView(v0, v1) {
     const [lo, hi] = vpBounds();
     const span = Math.min(Math.max(v1 - v0, MIN_SPAN), hi - lo);
@@ -826,12 +850,13 @@
     const last = sessions[sessions.length - 1];
     const dotCls = ['dot', st.live ? 'live' : '', st.hollow ? 'hollow' : ''].join(' ');
     const fresh = upd ? `<time class="fresh ${key === 'offline' ? 'stale' : ''}" title="${hhmmMs(upd)} 同步">${ago(upd)}</time>` : '';
-    const row = meta => `<div class="state-row" style="--c:${st.c}"><span class="${dotCls}"></span><span class="state-label">${st.label}</span>${meta ? `<span class="state-meta">${meta}</span>` : ''}${fresh}</div>`;
+    const onceEnd = v.roundEnded;
+    const row = meta => `<div class="state-row" style="--c:${onceEnd ? 'var(--mute)' : st.c}"><span class="${onceEnd ? 'dot hollow' : dotCls}"></span><span class="state-label">${onceEnd ? '这一轮结束了' : st.label}</span>${meta ? `<span class="state-meta">${meta}</span>` : ''}${onceEnd ? '' : fresh}</div>`;
     const taskH = (t, quiet) => {
       const name = taskName(t, perms);
       return name ? `<h2 class="task ${quiet ? 'quiet' : ''}">${esc(name)}</h2>` : `<h2 class="task private ${quiet ? 'quiet' : ''}">${ICON.lock}${SECRET}</h2>`;
     };
-    const aside = NOTE[key] ? `<p class="aside">${NOTE[key]}</p>` : '';
+    const aside = onceEnd ? '' : NOTE[key] ? `<p class="aside">${NOTE[key]}</p>` : '';
 
     let hero = '';
     const sess = current || (key === 'rest' ? last : null);
@@ -846,7 +871,7 @@
       meta.push(`抽查 <b>${sess.checks.length}</b> 次`);
       if (nFail) meta.push(`不合格 <b class="bad">${nFail}</b> 次`);
       if ((sess.patrols || []).length) meta.push(`拦截 <b class="pat">${sess.patrols.length}</b> 次`);
-      hero = `${row(key === 'rest' ? `${hhmmMs(last.e)} 起` : '')}${taskH(sess.task, key === 'offline')}
+      hero = `${row(key === 'rest' ? `${hhmmMs(last.e)} ${onceEnd ? '结束' : '起'}` : '')}${taskH(sess.task, key === 'offline')}
         <div class="meta-line">${meta.map(m => `<span>${m}</span>`).join('')}</div>
         ${vh}${aside}`;
     } else {
@@ -1066,10 +1091,10 @@
     const owner = v.owner || {};
     const avatar = safeURL(owner.avatar_url);
     const name = (owner.nickname || '').trim() || '伙伴';
-    const date = v.dayStart ? dayLabel(v.dayStart) : dayLabel(nowMs());
+    const date = v.once && v.roundStart ? `${mdhm(v.roundStart).replace(' ', ' ')} 开始` : v.dayStart ? dayLabel(v.dayStart) : dayLabel(nowMs());
     return `<header class="head">
         <div class="head-id">${avatar ? `<img class="avatar" src="${esc(avatar)}" alt="" referrerpolicy="no-referrer">` : ''}
-          <div class="head-title"><h1>${esc(name)}今天的专注</h1><span class="head-date">${date}</span></div></div>
+          <div class="head-title"><h1>${esc(name)}${v.once ? '的这一轮专注' : '今天的专注'}</h1><span class="head-date">${date}</span></div></div>
         ${tabs ? `<div class="tabs" role="tablist">
           <button class="tab" role="tab" data-tab="now" aria-selected="${S.tab === 'now'}">现在</button>
           <button class="tab" role="tab" data-tab="review" aria-selected="${S.tab === 'review'}">今日回顾</button><span class="tab-ind" aria-hidden="true"></span></div>` : ''}
@@ -1081,14 +1106,30 @@
     if (!S.loaded) return `<article class="card"><div class="loading">正在打开…</div></article>`;
     if (!S.data) return `<article class="card"><div class="loading">${esc(S.error || '暂时连不上，稍后再试试。')}</div></article>`;
     const v = view();
-    if (v.key === 'ended') return ended(v, '此分享链接已过期，请向你的伙伴重新获取。', enter);
+    if (v.key === 'ended') return ended(v, v.once ? '这一轮专注已经结束，分享链接已失效。' : '此分享链接已过期，请向你的伙伴重新获取。', enter);
+    if (v.key === 'locked') return gate(v, enter);
     if (v.key === 'missing') return ended(v, '没有找到这个分享，请向你的伙伴重新获取。', enter);
-    document.title = `${(v.owner.nickname || '').trim() || '伙伴'}今天的专注`;
+    document.title = `${(v.owner.nickname || '').trim() || '伙伴'}${v.once ? '的这一轮专注' : '今天的专注'}`;
+    const tab = v.once ? 'now' : S.tab;
+    const until = !v.once ? `有效期至 ${mdhm(v.expires)}` : v.roundEnded ? `链接将于 ${hhmmMs(v.expires)} 失效` : '本轮结束 1 小时后失效';
     return `<article class="card">
-      ${head(v, true)}<div class="tabs-wrap"></div>
-      <div class="panel ${enter ? 'enter' : ''}">${S.tab === 'now' ? renderNow(v) : renderReview(v)}</div>
-      <footer class="foot rule"><span>有效期至 ${mdhm(v.expires)}</span><a href="https://github.com/Dennis-Ouyang/FocusGuard" target="_blank" rel="noopener">${ICON.shield}FocusGuard</a></footer>
+      ${head(v, !v.once)}<div class="tabs-wrap"></div>
+      <div class="panel ${enter ? 'enter' : ''}">${tab === 'now' ? renderNow(v) : renderReview(v)}</div>
+      <footer class="foot rule"><span>${until}</span><a href="https://github.com/Dennis-Ouyang/FocusGuard" target="_blank" rel="noopener">${ICON.shield}FocusGuard</a></footer>
     </article>`;
+  }
+  function gate(v, enter) {
+    const len = Math.min(6, Math.max(4, v.pwLen || 4));
+    const locked = v.lockedUntil && v.lockedUntil > nowMs();
+    const cells = Array.from({ length: len }, (_, i) => `<span class="pin-c ${i === 0 ? 'cur' : ''}" data-i="${i}"></span>`).join('');
+    const err = locked ? `尝试次数太多了，请 ${hhmmMs(v.lockedUntil)} 后再试` : v.wrong ? '密码不对，再问问伙伴' : '';
+    return `<article class="card">${head(v, false)}<form class="gate ${enter ? 'enter' : ''}" id="gateForm" autocomplete="off">
+        <span class="gate-ico">${ICON.lock}</span>
+        <h2>输入访问密码</h2>
+        <p class="gate-sub">伙伴给这个链接加了密码</p>
+        <label class="pin ${v.wrong && !S.gateShook ? 'bad' : ''}"><input id="pinIn" inputmode="numeric" pattern="[0-9]*" maxlength="${len}" aria-label="访问密码" autocomplete="one-time-code" ${locked ? 'disabled' : ''}><span class="pin-cells" aria-hidden="true">${cells}</span></label>
+        <p class="gate-err" id="gateErr" aria-live="polite">${esc(err)}</p>
+      </form></article>`;
   }
   function ended(v, text, enter) {
     return `<article class="card">${head(v, false)}<div class="ended ${enter ? 'enter' : ''}"><h2><span>无可奈何花落去，</span><span>似曾相识燕归来。</span></h2>
@@ -1102,7 +1143,7 @@
   function render() {
     if (drag || G || TLG) return;
     const active = document.activeElement;
-    const keepFocus = active && (active.id === 'cheerText' || active.id === 'visitorName');
+    const keepFocus = active && (active.id === 'cheerText' || active.id === 'visitorName' || (active.id === 'pinIn' && active.value));
     if (keepFocus) return;
     const key = S.data ? view().key : 'loading';
     const enter = last.tab !== S.tab || last.key !== key;
@@ -1113,7 +1154,8 @@
     vpAfterRender();
     if (document.getElementById('tl')) tlScan(S.tlAt ?? null);
     if (enter && S.tab === 'review' && !reduce) countUp();
-    const inp = $('#visitorName') || $('#cheerText'); if (inp) inp.focus();
+    const inp = $('#visitorName') || $('#cheerText') || $('#pinIn'); if (inp && !inp.disabled) inp.focus();
+    if ($('.pin.bad')) S.gateShook = true;
   }
   function placeIndicator() {
     const el = $('.tab-ind'), on = $('.tab[aria-selected="true"]');
@@ -1150,7 +1192,7 @@
   async function act(kind, payload) {
     S.busy = kind; S.error = ''; render();
     try {
-      await rpc('fg_friend_action', { p_code: code, p_visitor_key: visitorKey, p_visitor: S.visitor, p_kind: kind, p_payload: payload || {} });
+      await rpc('fg_friend_action', { p_code: code, p_visitor_key: visitorKey, p_visitor: S.visitor, p_kind: kind, p_payload: payload || {}, p_password: sharePassword() });
       if (kind === 'cheer') { S.cheerOpen = false; S.cheerDraft = ''; }
       if (kind === 'punish') S.pun = null;
     } catch (e) {
@@ -1188,6 +1230,14 @@
     }
   });
   document.addEventListener('input', e => {
+    if (e.target.id === 'pinIn') {
+      const len = Number(e.target.maxLength) || 4;
+      const val = e.target.value = e.target.value.replace(/\D/g, '').slice(0, len);
+      document.querySelectorAll('.pin-c').forEach((c, i) => { c.textContent = val[i] ? '•' : ''; c.classList.toggle('cur', i === val.length); });
+      const err = $('#gateErr'); if (err) err.textContent = '';
+      if (val.length === len) { e.target.blur(); S.gateShook = false; setPassword(val); viewCache = null; load(); }
+      return;
+    }
     if (e.target.id === 'cheerText') { S.cheerDraft = e.target.value; const c = $('#cheerCount'); if (c) c.textContent = `${e.target.value.length} / 60`; }
   });
   document.addEventListener('click', e => {
