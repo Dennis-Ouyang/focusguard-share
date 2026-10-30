@@ -201,7 +201,7 @@
       const c = snap.current, s = ms(c.start);
       const at = ms(c.at) || upd;
       current = {
-        id: c.id || 'cur', task: c.task, s, at: Math.round(at / 1000), plan: c.planMin, failLimit: c.failLimit || 4,
+        id: c.id || 'cur', task: c.task, s, e: at, at: Math.round(at / 1000), plan: c.planMin, failLimit: c.failLimit || 4,
         elapsedMin: Math.floor((c.elapsedSec || 0) / 60),
         kind: key === 'offline' ? 'stale' : key === 'pause' ? 'paused' : 'live',
         checks: toChecks(c.checks, fails)
@@ -268,29 +268,24 @@
     </div>`;
   }
 
-  /* ---------- scrubber ---------- */
+  /* ---------- per-round scrubber (今日回顾) ----------
+     One set of ticks, every 30 s. A check takes over the tick nearest to it and is drawn wider;
+     the slots around it stretch by exactly that extra width, so every gap on the rail stays the same.
+     Time ↔ x is then piecewise linear through the slots, and the playhead follows the same map. */
   const SCR = {};
-  function scrubHTML(sess, live, dim, v) {
+  const SC_TICK = 1.5, SC_CHECK = 3.5;
+  function scrubHTML(sess, live, v) {
     const sid = sess.id;
     const start = Math.floor(sess.s / 1000);
-    const end = sess.plan ? start + sess.plan * 60 : Math.floor(sess.e / 1000);
-    const reached = sess.at || Math.floor(sess.e / 1000);
-    SCR[sid] = { sess, start, end: Math.max(end, reached, start + 60), reached, live, v };
-    const span = SCR[sid].end - start;
+    const end = Math.max(Math.floor(sess.e / 1000), start + 60);
+    SCR[sid] = { sess, start, end, reached: end, live, v };
     if (S.scrub[sid] == null || !sess.checks.some(c => c.sec === S.scrub[sid])) S.scrub[sid] = sess.checks.length ? sess.checks[sess.checks.length - 1].sec : start;
-    const p = s => ((s - start) / span * 100).toFixed(3);
-    const color = !sess.at || dim ? 'var(--block)' : sess.kind === 'paused' ? 'var(--pause)' : 'var(--focus)';
-    const step = span > 3 * 3600 ? 120 : span > 90 * 60 ? 60 : 30;
-    const minor = [];
-    for (let t = Math.ceil(start / step) * step; t <= start + span; t += step) minor.push(`<i class="mt ${t > reached ? 'future' : ''}" style="left:${p(t)}%" data-sec="${t}"></i>`);
-    const ticks = minor.join('') + sess.checks.map(c => `<i class="tk ${c.ok ? '' : c.fail.excused ? 'excused' : 'fail'} ${c.friend ? 'friend' : ''}" style="left:${p(c.sec)}%" data-sec="${c.sec}"></i>`).join('');
     const near = nearest(sid, S.scrub[sid]);
-    return `<div class="scrub" data-sid="${esc(sid)}" style="--c:${color}">
+    return `<div class="scrub" data-sid="${esc(sid)}" style="--c:var(--block)">
         <div class="scrub-rail">
-          ${ticks}
-          <div class="playhead" tabindex="0" role="slider" aria-label="拖动查看抽查" aria-valuemin="${start}" aria-valuemax="${reached}" aria-valuenow="${S.scrub[sid]}" aria-valuetext="${hhmm(S.scrub[sid])}" style="left:${p(S.scrub[sid])}%"><span class="bubble">${hhmm(S.scrub[sid])}</span></div>
+          <div class="playhead" tabindex="0" role="slider" aria-label="拖动查看抽查" aria-valuemin="${start}" aria-valuemax="${end}" aria-valuenow="${S.scrub[sid]}" aria-valuetext="${hhmm(S.scrub[sid])}"><span class="bubble">${hhmm(S.scrub[sid])}</span></div>
         </div>
-        <div class="strip-axis"><span>${hhmm(start)}</span><span>${hhmm(start + span)}</span></div>
+        <div class="strip-axis"><span>${hhmm(start)}</span><span>${hhmm(end)}</span></div>
       </div>
       <div class="slot" data-slot="${esc(sid)}" data-cid="${near ? esc(near.id) : ''}">${slotHTML(sid, near)}</div>`;
   }
@@ -316,23 +311,78 @@
     if (c.friend) return detail(c, live, v);
     return `<div class="brief"><span class="dot" style="--c:var(--focus)"></span><span>合格</span><span class="when">${hhmm(c.sec)}</span>${c.why || c.app ? `<span class="why">${esc([c.app, c.why].filter(Boolean).join('  '))}</span>` : ''}</div>`;
   }
+  const rankCheck = c => (!c.ok && !c.fail.excused) ? 3 : c.friend ? 2 : !c.ok ? 1 : 0;
+  function layoutScrub(el) {
+    const cfg = SCR[el.dataset.sid], rail = el.querySelector('.scrub-rail');
+    const W = rail.clientWidth;
+    if (!W || el._w === W) return;
+    el._w = W;
+    const { start, end, reached, sess } = cfg, span = end - start;
+    const ts = [];
+    for (let t = Math.ceil(start / 30) * 30; t <= end; t += 30) ts.push(t);
+    if (ts.length < 2) ts.push(ts[0] + 30);
+    const own = new Array(ts.length).fill(null);
+    sess.checks.forEach(c => {
+      const j = Math.min(ts.length - 1, Math.max(0, Math.round((c.sec - ts[0]) / 30)));
+      if (!own[j] || rankCheck(c) > rankCheck(own[j])) own[j] = c;
+    });
+    const x0 = (ts[0] - start) / span * W, xN = (ts[ts.length - 1] - start) / span * W;
+    const extra = (SC_CHECK - SC_TICK) / 2;
+    let widen = 0;
+    for (let j = 0; j < ts.length - 1; j++) widen += extra * (!!own[j] + !!own[j + 1]);
+    const a = (xN - x0 - widen) / Math.max(1, ts.length - 1);
+    const xs = [x0];
+    for (let j = 1; j < ts.length; j++) xs.push(xs[j - 1] + a + extra * (!!own[j - 1] + !!own[j]));
+    cfg.ts = ts; cfg.xs = xs; cfg.W = W;
+    rail.querySelectorAll('.tk, .mt').forEach(n => n.remove());
+    const head = rail.querySelector('.playhead');
+    ts.forEach((t, j) => {
+      const c = own[j], i = document.createElement('i');
+      if (c) {
+        i.className = `tk ${c.ok ? '' : c.fail.excused ? 'excused' : 'fail'} ${c.friend ? 'friend' : ''}`;
+        i.dataset.sec = c.sec;
+        i.dataset.h = !c.ok && !c.fail.excused || c.friend ? 18 : 15;
+      } else {
+        i.className = `mt ${t > reached ? 'future' : ''}`;
+        i.dataset.sec = t; i.dataset.h = 10;
+      }
+      i.dataset.x = xs[j];
+      i.style.left = xs[j].toFixed(2) + 'px';
+      rail.insertBefore(i, head);
+    });
+  }
+  function scrubX(cfg, sec) {
+    const { ts, xs, W } = cfg, span = cfg.end - cfg.start;
+    if (sec <= ts[0]) return (sec - cfg.start) / span * W;
+    if (sec >= ts[ts.length - 1]) return xs[xs.length - 1] + (sec - ts[ts.length - 1]) / span * W;
+    const j = Math.min(ts.length - 2, Math.floor((sec - ts[0]) / 30));
+    return xs[j] + (xs[j + 1] - xs[j]) * (sec - ts[j]) / 30;
+  }
+  function scrubSec(cfg, x) {
+    const { ts, xs, W } = cfg, span = cfg.end - cfg.start;
+    if (x <= xs[0]) return cfg.start + x / W * span;
+    if (x >= xs[xs.length - 1]) return ts[ts.length - 1] + (x - xs[xs.length - 1]) / W * span;
+    let j = 0; while (j < xs.length - 2 && xs[j + 1] < x) j++;
+    return ts[j] + 30 * (x - xs[j]) / (xs[j + 1] - xs[j]);
+  }
   function paintScrub(el, sec, dragging) {
     const sid = el.dataset.sid, cfg = SCR[sid];
     if (!cfg) return;
-    const span = cfg.end - cfg.start;
-    const p = (sec - cfg.start) / span * 100;
+    layoutScrub(el);
+    if (!cfg.xs) return;
+    const hx = scrubX(cfg, sec), p = hx / cfg.W * 100;
     const head = el.querySelector('.playhead'), bubble = el.querySelector('.bubble');
-    head.style.left = p + '%';
+    head.style.left = hx.toFixed(2) + 'px';
     bubble.style.transform = `translateX(-${Math.min(100, Math.max(0, p)).toFixed(1)}%)`;
     const near = nearest(sid, sec);
-    const w = el.querySelector('.scrub-rail').getBoundingClientRect().width || 1;
     el.querySelectorAll('.tk, .mt').forEach(tk => {
-      const d = Math.abs(Number(tk.dataset.sec) - sec) / span * w;
+      const d = Math.abs(Number(tk.dataset.x) - hx);
       const k = Math.max(0, 1 - d / 56);
-      tk.style.setProperty('--s', (1 + (tk.classList.contains('mt') ? 1.4 : .6) * k * k * (3 - 2 * k)).toFixed(3));
+      // every tick grows by the same 12px at the playhead, so they all move together
+      tk.style.setProperty('--s', (1 + 12 / Number(tk.dataset.h) * k * k * (3 - 2 * k)).toFixed(3));
       if (tk.classList.contains('tk')) tk.classList.toggle('on', !!near && Number(tk.dataset.sec) === near.sec);
     });
-    const snapped = near && Math.abs(near.sec - sec) / span * w < 7;
+    const snapped = near && Math.abs(scrubX(cfg, near.sec) - hx) < 7;
     bubble.textContent = hhmm(dragging ? sec : near ? near.sec : sec);
     bubble.className = 'bubble' + (snapped && near && !near.ok ? ' fail' : snapped && near && near.friend ? ' friend' : '');
     head.setAttribute('aria-valuenow', Math.round(sec));
@@ -347,7 +397,8 @@
   let drag = null;
   const secAt = (el, x) => {
     const cfg = SCR[el.dataset.sid], r = el.querySelector('.scrub-rail').getBoundingClientRect();
-    const sec = cfg.start + Math.min(1, Math.max(0, (x - r.left) / r.width)) * (cfg.end - cfg.start);
+    layoutScrub(el);
+    const sec = scrubSec(cfg, Math.min(r.width, Math.max(0, x - r.left)));
     return Math.min(cfg.reached, Math.max(cfg.start, sec));
   };
   document.addEventListener('pointerdown', e => {
@@ -370,7 +421,7 @@
   document.addEventListener('pointerup', endDrag);
   document.addEventListener('pointercancel', endDrag);
   document.addEventListener('keydown', e => {
-    const head = e.target.closest && e.target.closest('.playhead');
+    const head = e.target.closest && e.target.closest('.scrub .playhead');
     if (!head) return;
     const el = head.closest('.scrub'), sid = el.dataset.sid, checks = SCR[sid].sess.checks;
     if (!checks.length) return;
@@ -383,6 +434,343 @@
     e.preventDefault();
     S.scrub[sid] = checks[i].sec; paintScrub(el, checks[i].sec, false);
   });
+
+  /* ---------- 现在: a window onto today's real timeline ----------
+     The rail is the share day (04:00 → next 04:00) seen through a viewport [v0, v1] in epoch seconds.
+     Ticks keep a fixed 3px pitch on screen, so zooming changes how much time each tick covers, never how dense the rail looks.
+     On open the viewport fits this round from its start to its projected end; while paused, the projected end slides right in real time. */
+  const PITCH = 3, MIN_SPAN = 8 * 60;
+  const VP = { key: null, round: null, v0: 0, v1: 1, sel: null, anim: null, touched: false, headTouched: false, m: 0, mT: 0, mRaf: 0, fresh: false };
+  let VD = null, LASTV = null;
+
+  function viewData(v) {
+    const { key, sessions, current } = v;
+    const nowSec = Math.floor(nowMs() / 1000);
+    const spans = sessions.map(x => ({ s: x.s / 1000, e: x.e / 1000, k: x.done ? 'done' : 'cut' }));
+    const checks = [];
+    sessions.forEach(x => x.checks.forEach(c => { c.sess = x; checks.push(c); }));
+    let start, projEnd, focusSess = current, at = null;
+    if (current) {
+      start = current.s / 1000;
+      at = current.at;
+      spans.push({ s: start, e: at, k: key === 'offline' ? 'stale' : 'cur' });
+      if (key === 'pause') spans.push({ s: at, e: nowSec, k: 'paused' });
+      projEnd = start + (current.plan || current.elapsedMin) * 60 + (key === 'pause' ? Math.max(0, nowSec - at) : 0);
+      spans.push({ s: key === 'pause' ? nowSec : at, e: projEnd, k: 'plan' });
+      current.checks.forEach(c => { c.sess = current; checks.push(c); });
+    } else {
+      focusSess = sessions[sessions.length - 1];
+      start = focusSess.s / 1000; projEnd = focusSess.e / 1000;
+    }
+    checks.sort((a, b) => a.sec - b.sec);
+    return { key, spans, checks, start, projEnd, nowSec, at, current, focusSess, day0: v.dayStart / 1000, day1: v.dayEnd / 1000,
+      colorVar: STATES[key].c.slice(4, -1), live: key === 'focus', v };
+  }
+  const fitRange = () => { const pad = (VD.projEnd - VD.start) * .14; return [VD.start - pad, VD.projEnd + pad]; };
+  const vpBounds = () => [VD.day0, Math.min(VD.day1, Math.max(VD.projEnd, VD.nowSec) + 3600)];
+  function clampView(v0, v1) {
+    const [lo, hi] = vpBounds();
+    const span = Math.min(Math.max(v1 - v0, MIN_SPAN), hi - lo);
+    v0 = Math.min(Math.max(v0, lo), hi - span);
+    return [v0, v0 + span];
+  }
+  const ARROW_L = '<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 2.5 4 6l3.5 3.5"/></svg>';
+  const ARROW_R = '<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 2.5 8 6l-3.5 3.5"/></svg>';
+
+  function viewHTML(v) {
+    LASTV = v;
+    VD = viewData(v);
+    const round = VD.focusSess && VD.focusSess.id;
+    if (VP.key !== v.key || VP.round !== round) {
+      VP.key = v.key; VP.round = round; VP.fresh = true;
+      [VP.v0, VP.v1] = fitRange();
+      const own = VD.focusSess.checks;
+      VP.sel = own.length ? own[own.length - 1].sec : VD.start;
+    } else if (!VD.checks.some(c => c.sec === VP.sel) && VD.focusSess.checks.length) {
+      VP.sel = VD.focusSess.checks[VD.focusSess.checks.length - 1].sec;
+    }
+    const c = nearestAll(VP.sel);
+    return `<div class="vp" id="vp" style="--c:${STATES[v.key].c}">
+        <div class="vp-stage" id="vpStage">
+          <canvas id="vpCanvas" height="56" aria-hidden="true"></canvas>
+          <i class="edge-hint l ${VP.touched ? 'gone' : ''}" aria-hidden="true">${ARROW_L}</i><i class="edge-hint r ${VP.touched ? 'gone' : ''}" aria-hidden="true">${ARROW_R}</i>
+          <div class="playhead vp-head" id="vpHead" tabindex="0" role="slider" aria-label="选择一次抽查" aria-valuetext="${hhmm(VP.sel)}"><span class="bubble" id="vpBubble">${hhmm(VP.sel)}</span><i class="head-hint l ${VP.headTouched ? 'gone' : ''}" aria-hidden="true">${ARROW_L}</i><i class="head-hint r ${VP.headTouched ? 'gone' : ''}" aria-hidden="true">${ARROW_R}</i></div>
+        </div>
+        <div class="vp-bar">
+          <span class="vp-tools">
+            <button class="vp-fit" data-vp="fit" hidden>回到本轮</button>
+            <button data-vp="out" aria-label="缩小时间">−</button><button data-vp="in" aria-label="放大时间">+</button>
+          </span>
+        </div>
+      </div>
+      <div class="slot" id="vpSlot" data-cid="${c ? esc(c.id) : ''}">${c ? vpSlotHTML(c) : ''}</div>`;
+  }
+  function nearestAll(sec) {
+    let best = null;
+    VD.checks.forEach(c => { if (!best || Math.abs(c.sec - sec) < Math.abs(best.sec - sec)) best = c; });
+    return best;
+  }
+  function vpSlotHTML(c) {
+    SCR.vp = { sess: c.sess, live: VD.live && c.sess === VD.current, v: VD.v };
+    return slotHTML('vp', c);
+  }
+
+  // label steps align to the sharer's local clock, not UTC
+  const localOff = () => { const d0 = VD.day0, h = Number(hhmm(d0).slice(0, 2)), m = Number(hhmm(d0).slice(3)); return ((h * 3600 + m * 60) - (d0 % 86400) + 86400 * 2) % 86400; };
+  function cssVar(el, n) { return getComputedStyle(el).getPropertyValue(n).trim(); }
+  function vpDraw() {
+    const cv = document.getElementById('vpCanvas');
+    if (!cv || !VD) return;
+    const W = cv.clientWidth, H = 56, dpr = window.devicePixelRatio || 1;
+    if (!W) return;
+    if (cv.width !== Math.round(W * dpr)) { cv.width = Math.round(W * dpr); cv.height = H * dpr; }
+    const g = cv.getContext('2d');
+    g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, H);
+    const C = { c: cssVar(cv, VD.colorVar), ink: cssVar(cv, '--ink'), ink2: cssVar(cv, '--ink-2'), ink4: cssVar(cv, '--ink-4'), fail: cssVar(cv, '--fail'), accent: cssVar(cv, '--accent'), pause: cssVar(cv, '--pause'), font: cssVar(cv, '--sans') };
+    const spp = (VP.v1 - VP.v0) / W, X = t => (t - VP.v0) / spp, mid = 17;
+    const hx = X(VP.sel);
+    const lift = px => { const k = Math.max(0, 1 - Math.abs(px - hx) / 60); return k * k * (3 - 2 * k); };
+    const spanAt = t => { for (let i = VD.spans.length - 1; i >= 0; i--) { const s = VD.spans[i]; if (t >= s.s && t <= s.e) return s.k; } return null; };
+    const step = PITCH * spp;
+    // when checks (~170s apart) come closer than a few px, morph into the 今日回顾 look: one rounded block per round, fails flagged on top
+    const gap = 170 / spp, want = VP.m > .5 ? (gap < 7 ? 1 : 0) : (gap < 4.5 ? 1 : 0);
+    if (VP.m !== want) {
+      const now = performance.now(), dt = Math.min(48, now - (VP.mT || now));
+      VP.m = reduce ? want : want > VP.m ? Math.min(1, VP.m + dt / 320) : Math.max(0, VP.m - dt / 320);
+      VP.mT = now;
+      if (VP.m !== want && !VP.mRaf) VP.mRaf = requestAnimationFrame(() => { VP.mRaf = 0; vpDraw(); });
+    } else VP.mT = 0;
+    const m = VP.m, em = m * m * (3 - 2 * m);
+    const bar = (x, y, w, h, r) => { g.beginPath(); if (g.roundRect) g.roundRect(x, y, w, h, Math.min(r, w / 2, h / 2)); else g.rect(x, y, w, h); g.fill(); };
+    const tint = k => k === 'cur' ? [C.c, .8] : k === 'paused' ? [C.pause, .45] : k === 'plan' ? [C.c, .24] : k === 'done' ? [C.ink, .42] : k === 'cut' ? [C.ink, .18] : k === 'stale' ? [C.ink, .32] : null;
+    // a check takes two tick slots (i, i+1) and fills them edge to edge, so the gaps on either side stay exactly one normal gap
+    const own = new Map();
+    VD.checks.forEach(c => {
+      if (c.sec < VP.v0 - 2 * step || c.sec > VP.v1 + step) return;
+      let i = Math.floor(c.sec / step);
+      if (own.has(i - 1)) i -= 1;
+      const o = own.get(i);
+      if (!o || rankCheck(c) > rankCheck(o) || (rankCheck(c) === rankCheck(o) && c.sess === VD.focusSess)) own.set(i, c);
+    });
+    const snap = t => Math.round(X(t) * dpr) / dpr;
+    const BLK = 16, flags = [];
+    function drawCheck(x, h, w, col, exc) {
+      if (exc) { g.strokeStyle = col; g.lineWidth = 1; g.beginPath(); if (g.roundRect) g.roundRect(x - w / 2 + .5, mid - h / 2 + .5, w - 1 || 1, h - 1, w / 2); else g.rect(x - w / 2, mid - h / 2, w, h); g.stroke(); }
+      else { g.fillStyle = col; bar(x - w / 2, mid - h / 2, w, h, w / 2); }
+    }
+    for (let i = Math.ceil(VP.v0 / step); i * step <= VP.v1; i++) {
+      const t = i * step, px = X(t), x = Math.round(px * dpr) / dpr, k = spanAt(t), lf = 1 + 1.2 * lift(px);
+      const c = own.get(i);
+      if (!c && own.has(i - 1) && em === 0) continue;
+      if (c) {
+        const xa = x, xb = snap(t + step), cx = (xa + xb) / 2, cw = xb - xa + .5;
+        const fail = !c.ok && !c.fail.excused, exc = !c.ok && c.fail.excused;
+        const col = fail || exc ? C.fail : c.friend ? C.accent : C.ink2;
+        const h0 = (fail || c.friend ? 18 : 15) + 10 * (lf - 1), keep = fail || exc || c.friend;
+        const h = keep ? h0 + (BLK + 8 - h0) * em : h0, w = cw + (2 - cw) * em;
+        g.globalAlpha = (c.sess === VD.focusSess || c.friend || fail ? 1 : .6) * (keep ? 1 : 1 - em);
+        if (keep && em > 0) flags.push([cx, h, w, col, exc, g.globalAlpha]);
+        else if (g.globalAlpha > .01) drawCheck(cx, h, w, col, exc);
+        if (em === 0) continue;
+      }
+      const tn = tint(k);
+      const [col, a] = tn || [C.ink4, t > VD.nowSec ? .16 : .32];
+      const h = (10 + (BLK - 10) * (tn ? em : 0)) * (tn ? 1 + (lf - 1) * (1 - em) : lf);
+      g.globalAlpha = tn ? a * (1 - em) : a * (1 - .45 * em); g.fillStyle = col;
+      if (g.globalAlpha > .01) bar(x - .5, mid - h / 2, 1, h, .5);
+    }
+    if (em > 0) VD.spans.forEach(sp => {
+      const [col, a] = tint(sp.k), x0 = Math.max(-8, X(sp.s)), x1 = Math.min(W + 8, X(sp.e));
+      if (x1 <= x0) return;
+      g.globalAlpha = a * em; g.fillStyle = col;
+      bar(x0, mid - BLK / 2, Math.max(2, x1 - x0), BLK, 3);
+    });
+    flags.forEach(([x, h, w, col, exc, a]) => { g.globalAlpha = a; drawCheck(x, h, w, col, exc); });
+    const nx = X(VD.nowSec);
+    if (nx > -2 && nx < W + 2) {
+      g.globalAlpha = .9; g.fillStyle = C.ink;
+      g.beginPath(); g.arc(nx, mid + 17, 2, 0, Math.PI * 2); g.fill();
+    }
+    const L = [60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600].find(l => l / spp >= 64) || 21600;
+    const off = localOff();
+    g.font = `500 10.5px ${C.font}`; g.textAlign = 'center'; g.textBaseline = 'alphabetic'; g.fillStyle = C.ink4; g.globalAlpha = 1;
+    for (let t = Math.ceil((VP.v0 + off) / L) * L - off; t <= VP.v1; t += L) {
+      const px = X(t);
+      if (Math.abs(px - nx) < 34) continue;
+      g.fillText(hhmm(t), px, H - 4);
+    }
+    if (nx > 0 && nx < W) { g.fillStyle = C.ink; g.globalAlpha = .75; g.fillText('现在', nx, H - 4); }
+    g.globalAlpha = 1;
+
+    const head = document.getElementById('vpHead');
+    head.style.left = hx + 'px';
+    head.classList.toggle('off', hx < 0 || hx > W);
+    const fit = document.querySelector('[data-vp="fit"]');
+    if (fit) fit.hidden = !(VD.start > VP.v1 - (VP.v1 - VP.v0) * .2 || VD.projEnd < VP.v0 + (VP.v1 - VP.v0) * .2 || (VP.v1 - VP.v0) > (VD.projEnd - VD.start) * 4);
+  }
+
+  function vpSelect(sec, free) {
+    VP.sel = sec;
+    const c = nearestAll(sec);
+    const bubble = document.getElementById('vpBubble'), head = document.getElementById('vpHead');
+    if (!bubble) return;
+    const cv = document.getElementById('vpCanvas'), spp = (VP.v1 - VP.v0) / (cv.clientWidth || 1);
+    const snapped = c && Math.abs(c.sec - sec) / spp < 7;
+    bubble.textContent = hhmm(free ? sec : c ? c.sec : sec);
+    bubble.className = 'bubble' + (snapped && !c.ok ? ' fail' : snapped && c.friend ? ' friend' : '');
+    head.setAttribute('aria-valuetext', `${hhmm(sec)}${c ? (c.ok ? ' 合格' : ' 不合格') : ''}`);
+    const slot = document.getElementById('vpSlot');
+    if (slot && c && slot.dataset.cid !== c.id) {
+      slot.dataset.cid = c.id;
+      slot.innerHTML = vpSlotHTML(c);
+      [...slot.children].forEach(ch => { ch.classList.remove('in'); void ch.offsetWidth; ch.classList.add('in'); });
+    }
+    vpDraw();
+  }
+  const ease = k => 1 - Math.pow(1 - k, 3);
+  function vpAnimTo(v0, v1, dur = 460) {
+    cancelAnimationFrame(VP.anim);
+    [v0, v1] = clampView(v0, v1);
+    if (reduce) { VP.v0 = v0; VP.v1 = v1; vpDraw(); return; }
+    const a0 = VP.v0, a1 = VP.v1, t0 = performance.now();
+    const tick = now => {
+      const k = Math.min(1, (now - t0) / dur), e = ease(k);
+      VP.v0 = a0 + (v0 - a0) * e; VP.v1 = a1 + (v1 - a1) * e; vpDraw();
+      if (k < 1) VP.anim = requestAnimationFrame(tick);
+    };
+    VP.anim = requestAnimationFrame(tick);
+  }
+  function vpZoom(factor, anchorT) {
+    const span = (VP.v1 - VP.v0) * factor;
+    const f = (anchorT - VP.v0) / (VP.v1 - VP.v0);
+    return clampView(anchorT - f * span, anchorT - f * span + span);
+  }
+  function vpReveal(sec) {
+    const span = VP.v1 - VP.v0;
+    if (sec < VP.v0 + span * .1 || sec > VP.v1 - span * .1) vpAnimTo(sec - span / 2, sec + span / 2);
+  }
+  function vpAfterRender() {
+    if (!document.getElementById('vp')) return;
+    if (VP.fresh && !reduce) {
+      VP.fresh = false;
+      const [f0, f1] = fitRange(), [lo, hi] = vpBounds();
+      VP.v0 = Math.max(lo, f0 - (f1 - f0) * 2.5); VP.v1 = Math.min(hi, f1 + (f1 - f0) * 1.5);
+      vpDraw(); vpAnimTo(f0, f1, 820);
+    } else { VP.fresh = false; vpDraw(); }
+    vpSelect(VP.sel, false);
+  }
+
+  /* gestures: one finger pans (with inertia) or taps to pick a check; two fingers pinch; the playhead itself can be dragged */
+  const ptrs = new Map();
+  let G = null;
+  const stageX = (st, x) => x - st.getBoundingClientRect().left;
+  const timeAtX = (st, x) => VP.v0 + stageX(st, x) / st.clientWidth * (VP.v1 - VP.v0);
+  function headTouched() { if (!VP.headTouched) { VP.headTouched = true; document.querySelectorAll('.head-hint').forEach(h => h.classList.add('gone')); } }
+  function touched() { if (!VP.touched) { VP.touched = true; document.querySelectorAll('.vp .edge-hint').forEach(h => h.classList.add('gone')); } }
+  document.addEventListener('pointerdown', e => {
+    const st = e.target.closest('#vpStage');
+    if (!st) return;
+    cancelAnimationFrame(VP.anim);
+    ptrs.set(e.pointerId, e.clientX);
+    try { st.setPointerCapture(e.pointerId); } catch (err) {}
+    touched();
+    if (ptrs.size === 2) {
+      const [a, b] = [...ptrs.values()];
+      G = { type: 'pinch', d0: Math.max(20, Math.abs(a - b)), span0: VP.v1 - VP.v0, anchor: timeAtX(st, (a + b) / 2), st };
+    } else if (e.target.closest('#vpHead')) {
+      G = { type: 'head', st }; headTouched();
+      st.classList.add('dragging');
+    } else {
+      G = { type: 'pan', st, x0: e.clientX, a0: VP.v0, a1: VP.v1, moved: false, lx: e.clientX, lt: performance.now(), vel: 0 };
+    }
+    e.preventDefault();
+  });
+  document.addEventListener('pointermove', e => {
+    if (!G || !ptrs.has(e.pointerId)) return;
+    ptrs.set(e.pointerId, e.clientX);
+    const st = G.st, W = st.clientWidth;
+    if (G.type === 'pinch' && ptrs.size >= 2) {
+      const [a, b] = [...ptrs.values()];
+      const span = G.span0 * G.d0 / Math.max(20, Math.abs(a - b));
+      const mx = stageX(st, (a + b) / 2) / W;
+      [VP.v0, VP.v1] = clampView(G.anchor - mx * span, G.anchor - mx * span + span);
+      vpDraw();
+    } else if (G.type === 'head') {
+      vpSelect(Math.min(Math.max(timeAtX(st, e.clientX), VD.day0), VD.nowSec), true);
+    } else if (G.type === 'pan') {
+      const dx = e.clientX - G.x0, spp = (G.a1 - G.a0) / W;
+      if (Math.abs(dx) > 4) G.moved = true;
+      [VP.v0, VP.v1] = clampView(G.a0 - dx * spp, G.a1 - dx * spp);
+      const now = performance.now(), dt = Math.max(1, now - G.lt);
+      G.vel = .8 * ((e.clientX - G.lx) / dt) + .2 * G.vel; G.lx = e.clientX; G.lt = now;
+      vpDraw();
+    }
+  });
+  function endPtr(e) {
+    if (!G || !ptrs.has(e.pointerId)) return;
+    ptrs.delete(e.pointerId);
+    const st = G.st;
+    if (G.type === 'pinch') {
+      if (ptrs.size === 1) { const x = [...ptrs.values()][0]; G = { type: 'pan', st, x0: x, a0: VP.v0, a1: VP.v1, moved: true, lx: x, lt: performance.now(), vel: 0 }; }
+      else G = null;
+      return;
+    }
+    if (G.type === 'head') {
+      st.classList.remove('dragging');
+      const c = nearestAll(VP.sel); if (c) vpSelect(c.sec, false);
+    } else if (G.type === 'pan') {
+      if (!G.moved) {
+        const c = nearestAll(timeAtX(st, e.clientX)); if (c) vpSelect(c.sec, false);
+      } else if (!reduce && Math.abs(G.vel) > .05) {
+        let vel = G.vel * (VP.v1 - VP.v0) / st.clientWidth, last = performance.now();
+        const glide = now => {
+          const dt = now - last; last = now;
+          [VP.v0, VP.v1] = clampView(VP.v0 - vel * dt, VP.v1 - vel * dt);
+          vel *= Math.pow(.94, dt / 16); vpDraw();
+          if (Math.abs(vel) * 16 > (VP.v1 - VP.v0) / st.clientWidth * .2) VP.anim = requestAnimationFrame(glide);
+        };
+        VP.anim = requestAnimationFrame(glide);
+      }
+    }
+    G = null;
+  }
+  document.addEventListener('pointerup', endPtr);
+  document.addEventListener('pointercancel', endPtr);
+  document.addEventListener('wheel', e => {
+    const st = e.target.closest && e.target.closest('#vpStage');
+    if (!st) return;
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault(); touched(); cancelAnimationFrame(VP.anim);
+      [VP.v0, VP.v1] = vpZoom(Math.exp(e.deltaY * .01), timeAtX(st, e.clientX)); vpDraw();
+    } else if (Math.abs(e.deltaX) > Math.abs(e.deltaY) || e.shiftKey) {
+      e.preventDefault(); touched(); cancelAnimationFrame(VP.anim);
+      const d = e.shiftKey && !e.deltaX ? e.deltaY : e.deltaX, spp = (VP.v1 - VP.v0) / st.clientWidth;
+      [VP.v0, VP.v1] = clampView(VP.v0 + d * spp, VP.v1 + d * spp); vpDraw();
+    }
+  }, { passive: false });
+  document.addEventListener('keydown', e => {
+    if (!e.target.closest || !e.target.closest('#vpHead') || !VD.checks.length) return;
+    const list = VD.checks;
+    let i = list.findIndex(c => c.sec === VP.sel);
+    if (e.key === 'ArrowRight') i = Math.min(list.length - 1, i + 1);
+    else if (e.key === 'ArrowLeft') i = Math.max(0, i - 1);
+    else if (e.key === '+' || e.key === '=') { vpAnimTo(...vpZoom(1 / 1.6, VP.sel)); e.preventDefault(); return; }
+    else if (e.key === '-') { vpAnimTo(...vpZoom(1.6, VP.sel)); e.preventDefault(); return; }
+    else return;
+    e.preventDefault(); touched(); headTouched();
+    vpSelect(list[i].sec, false); vpReveal(list[i].sec);
+  });
+  // while paused the clock keeps running: "已暂停" ticks and the projected end slides right
+  setInterval(() => {
+    if (!LASTV || LASTV.key !== 'pause' || S.tab !== 'now' || !document.getElementById('vp')) return;
+    VD = viewData(LASTV);
+    const pe = document.getElementById('vpEnd'), pp = document.getElementById('vpPaused');
+    if (pe) pe.textContent = hhmm(VD.projEnd);
+    if (pp) pp.textContent = pausedText(VD);
+    if (!G) vpDraw();
+  }, 1000);
+  const pausedText = vd => { const s = Math.max(0, vd.nowSec - vd.at); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
+  window.addEventListener('resize', () => vpDraw());
 
   /* ---------- 现在 ---------- */
   function renderNow(v) {
@@ -403,16 +791,21 @@
     if (sess) {
       const nFail = realFails(sess.checks).length;
       const curMin = current ? current.elapsedMin : 0;
+      const vh = viewHTML(v);
       const meta = [current ? `已专注 <b>${curMin}</b> 分钟` : `这一轮 <b>${last.minutes}</b> 分钟`];
       if (key === 'focus' && current.plan) meta.push(`还剩 <b>${Math.max(0, current.plan - curMin)}</b> 分钟`);
-      if (key === 'pause') meta.push('已暂停');
+      if (key === 'pause') meta.push(`已暂停 <b id="vpPaused">${pausedText(VD)}</b>`);
+      if ((key === 'focus' || key === 'pause') && current.plan) meta.push(`预计 <b id="vpEnd">${hhmm(VD.projEnd)}</b> 结束`);
       meta.push(`抽查 <b>${sess.checks.length}</b> 次`);
       if (nFail) meta.push(`不合格 <b class="bad">${nFail}</b> 次`);
       hero = `${row(key === 'rest' ? `${hhmmMs(last.e)} 起` : '')}${taskH(sess.task, key === 'offline')}
         <div class="meta-line">${meta.map(m => `<span>${m}</span>`).join('')}</div>
-        ${scrubHTML(sess, key === 'focus', key === 'offline', v)}${aside}`;
-    } else if (key === 'idle') hero = `${row(last ? `最后一轮 ${hhmmMs(last.e)} 结束` : '')}${aside}`;
-    else if (key === 'empty') hero = `${row('')}<h2 class="task quiet">今天还没有专注记录</h2>${aside}`;
+        ${vh}${aside}`;
+    } else {
+      LASTV = null;
+      if (key === 'idle') hero = `${row(last ? `最后一轮 ${hhmmMs(last.e)} 结束` : '')}${aside}`;
+      else if (key === 'empty') hero = `${row('')}<h2 class="task quiet">今天还没有专注记录</h2>${aside}`;
+    }
     return `<section class="now">${hero}</section>${renderActs(v)}`;
   }
 
@@ -442,14 +835,13 @@
     const lastCheck = checks[checks.length - 1];
     const running = S.busy === 'check' || (lastCheck && lastCheck.status === 'pending' && nowMs() - ms(lastCheck.at) < 5 * 60000);
     const left = S.data.checks_left;
-    const who = ((v.owner && v.owner.nickname) || '').trim() || 'TA';
-    let checkDesc = `看看 ${esc(who)} 此刻在做什么？`;
+    let checkDesc = '看看 TA 此刻在做什么？';
     if (running) checkDesc = '截一张图，交给 AI 看看';
-    else if (lastCheck && lastCheck.status === 'failed') checkDesc = '这次没查成，稍后再试试';
-    const badge = running ? '' : `<span class="act-badge">${left ? `可查 ${left} 次` : '今天已查完'}</span>`;
+    else if (lastCheck && lastCheck.status === 'done' && nowMs() - ms(lastCheck.at) < 10 * 60000) checkDesc = '结果在上面';
+    else if (lastCheck && lastCheck.status === 'failed' && nowMs() - ms(lastCheck.at) < 10 * 60000) checkDesc = '这次没查成，稍后再试试';
     const checkCard = canCheck ? `
-      <button class="act ${running ? 'busy' : ''}" data-act="check" ${running || !left ? 'disabled' : ''}>${badge}
-        <span class="act-t">${running ? ICON.load : ICON.eye}${running ? '正在抽查' : '立即抽查'}</span>
+      <button class="act ${running ? 'busy' : ''}" data-act="check" ${running || !left ? 'disabled' : ''}>
+        <span class="act-t">${running ? ICON.load : ICON.eye}${running ? '正在抽查' : '立即抽查'}<span class="act-n">${left ? `可查 ${left} 次` : '今天已查完'}</span></span>
         <span class="act-d">${checkDesc}</span>
       </button>` : '';
     const cheers = mine().filter(a => a.kind === 'cheer');
@@ -460,7 +852,7 @@
       <button class="act in" data-act="cheer" aria-live="polite"><span class="act-t">${ICON.check}已送达</span><span class="act-d sent-note"><q>${esc(lastCheer.payload && lastCheer.payload.text)}</q></span></button>` : `
       <button class="act" data-act="cheer">
         <span class="act-t">${ICON.spark}${cheerT}</span>
-        <span class="act-d verse">${key === 'empty' ? '流水既一去不再回头，时光更不会为你停留。\n愿你一分一秒珍惜，如今要赶上正是时候。' : '也许一生到底 一切超出估计\n但是我总会找到你鼓励'}</span>
+        <span class="act-d verse">${key === 'empty' ? '流水既一去不再回头，时光更不会为你停留。<br>愿你一分一秒珍惜，如今要赶上正是时候。' : '也许一生到底 一切超出估计<br>但是我总会找到你鼓励'}</span>
       </button>`;
     return `<section class="sec rule" aria-label="和伙伴互动">${head}
       <div class="acts" style="${canCheck ? '' : 'grid-template-columns:1fr'}">${checkCard}${cheerCard}</div>${err}
@@ -468,6 +860,60 @@
   }
 
   /* ---------- 今日回顾 ---------- */
+  let LASTR = null;
+  /* drag the pointer along the day; the round under it lights up, here and in the list below */
+  const tlTime = (tl, x) => { const r = tl.getBoundingClientRect(); return LASTR.dayStart + Math.min(1, Math.max(0, (x - r.left) / r.width)) * (LASTR.dayEnd - LASTR.dayStart); };
+  function tlScan(at0) {
+    const tl = document.getElementById('tl');
+    if (!tl || !LASTR) return;
+    const v = LASTR, now = nowMs(), span = v.dayEnd - v.dayStart;
+    const head = document.getElementById('tlHead'), bub = document.getElementById('tlBubble');
+    const at = at0 == null ? now : Math.min(at0, now);
+    const p = Math.min(100, Math.max(0, (at - v.dayStart) / span * 100));
+    head.style.left = p + '%';
+    bub.textContent = hhmmMs(at);
+    bub.style.transform = `translateX(-${p.toFixed(1)}%)`;
+    head.setAttribute('aria-valuetext', hhmmMs(at));
+    let sid = null;
+    if (at0 != null) {
+      const all = v.current ? v.sessions.concat(v.current) : v.sessions;
+      const hit = all.find(x => at >= x.s - 60000 && at <= (x === v.current ? x.at * 1000 : x.e) + 60000);
+      sid = hit ? hit.id : null;
+    }
+    tl.classList.toggle('scan', at0 != null);
+    tl.querySelectorAll('[data-sid]').forEach(el => el.classList.toggle('on', el.dataset.sid === sid));
+    const log = document.querySelector('.log');
+    if (log) { log.classList.toggle('scan', at0 != null && sid != null); log.querySelectorAll(':scope > li').forEach(li => li.classList.toggle('on', li.dataset.sid === sid)); }
+  }
+  let TLG = null;
+  document.addEventListener('pointerdown', e => {
+    const tl = e.target.closest && e.target.closest('#tl');
+    if (!tl || !LASTR) return;
+    TLG = { id: e.pointerId, tl };
+    try { tl.setPointerCapture(e.pointerId); } catch (err) {}
+    tl.classList.add('dragging');
+    S.tlAt = tlTime(tl, e.clientX); tlScan(S.tlAt);
+    e.preventDefault();
+  });
+  document.addEventListener('pointermove', e => {
+    if (!TLG || TLG.id !== e.pointerId) return;
+    S.tlAt = tlTime(TLG.tl, e.clientX); tlScan(S.tlAt);
+  });
+  const tlEnd = e => {
+    if (!TLG || TLG.id !== e.pointerId) return;
+    TLG.tl.classList.remove('dragging'); TLG = null;
+    if (S.tlAt >= nowMs() - 120000) S.tlAt = null; // let go at or past now: back to 现在
+    tlScan(S.tlAt);
+  };
+  document.addEventListener('pointerup', tlEnd);
+  document.addEventListener('pointercancel', tlEnd);
+  document.addEventListener('keydown', e => {
+    if (!e.target.closest || !e.target.closest('#tlHead') || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return;
+    const now = nowMs();
+    const t = (S.tlAt == null ? now : S.tlAt) + (e.key === 'ArrowRight' ? 1 : -1) * 600000;
+    S.tlAt = t >= now ? null : Math.max(LASTR.dayStart, t); tlScan(S.tlAt); e.preventDefault();
+  });
+
   const hm = min => { const h = Math.floor(min / 60), m = min % 60; return h ? `<span data-count="${h}">${h}</span><small>小时</small><span data-count="${m}">${m}</span><small>分钟</small>` : `<span data-count="${m}">${m}</span><small>分钟</small>`; };
   function renderReview(v) {
     const { key, sessions, current, perms } = v;
@@ -494,18 +940,19 @@
     const pos = t => Math.min(100, Math.max(0, (t - v.dayStart) / span * 100));
     const nowM = nowMs();
     const label = t => taskName(t, perms) || SECRET;
-    let segs = sessions.map(x => `<span class="seg ${x.done ? '' : 'cut'}" style="left:${pos(x.s)}%;width:${pos(x.e) - pos(x.s)}%" title="${hhmmMs(x.s)}–${hhmmMs(x.e)}  ${esc(label(x.task))}"></span>`).join('');
+    LASTR = v;
+    let segs = sessions.map(x => `<span class="seg ${x.done ? '' : 'cut'}" data-sid="${esc(x.id)}" style="left:${pos(x.s)}%;width:${pos(x.e) - pos(x.s)}%" title="${hhmmMs(x.s)}–${hhmmMs(x.e)}  ${esc(label(x.task))}"></span>`).join('');
     if (current) {
       const l = pos(current.s), r = pos(current.at * 1000);
-      segs += `<span class="seg cur ${current.kind === 'paused' ? 'paused' : ''} ${current.kind === 'stale' ? 'stale' : ''}" style="--c:${current.kind === 'stale' ? 'var(--block)' : st.c};left:${l}%;width:${r - l}%"></span>`;
-      if (key === 'focus' && current.plan) segs += `<span class="seg plan" style="--c:${st.c};left:${r}%;width:${Math.max(0, pos(current.s + current.plan * 60000) - r)}%"></span>`;
+      segs += `<span class="seg cur ${current.kind === 'paused' ? 'paused' : ''} ${current.kind === 'stale' ? 'stale' : ''}" data-sid="${esc(current.id)}" style="--c:${current.kind === 'stale' ? 'var(--block)' : st.c};left:${l}%;width:${r - l}%"></span>`;
+      if (key === 'focus' && current.plan) segs += `<span class="seg plan" data-sid="${esc(current.id)}" style="--c:${st.c};left:${r}%;width:${Math.max(0, pos(current.s + current.plan * 60000) - r)}%"></span>`;
     }
-    const flags = realFails(checks).map(c => `<span class="flag" style="left:${pos(c.sec * 1000)}%"></span>`).join('');
+    const flags = all.flatMap(x => realFails(x.checks).map(c => `<span class="flag" data-sid="${esc(x.id)}" style="left:${pos(c.sec * 1000)}%"></span>`)).join('');
     const ticks = [0, 1, 2, 3, 4, 5, 6].map(i => `<span style="left:${i / 6 * 100}%">${hhmmMs(v.dayStart + i * span / 6).slice(0, 2)}</span>`).join('');
     const timeline = `<section class="sec rule" aria-label="全天时间轴">
-      <div class="tl" role="img" aria-label="全天专注时间轴">
+      <div class="tl" id="tl" aria-label="全天专注时间轴">
         <div class="tl-track"><div class="tl-future" style="left:${pos(nowM)}%"></div>${segs}</div>${flags}
-        <span class="nowline" style="left:${pos(nowM)}%" title="现在 ${hhmmMs(nowM)}"></span>
+        <span class="nowline tl-head" id="tlHead" tabindex="0" role="slider" aria-label="拖动看某一轮" aria-valuetext="${hhmmMs(nowM)}" style="left:${pos(nowM)}%"><span class="bubble" id="tlBubble">${hhmmMs(nowM)}</span></span>
       </div>
       <div class="ticks" aria-hidden="true">${ticks}</div>
     </section>`;
@@ -517,14 +964,14 @@
         const isCur = x === current;
         const nf = realFails(x.checks).length;
         const open = S.open === x.id;
-        return `<li class="${isCur ? 'cur' : x.done ? '' : 'cut'}" ${isCur ? `style="--c:${current.kind === 'stale' ? 'var(--ink-2)' : st.c}"` : ''}>
+        return `<li data-sid="${esc(x.id)}" class="${isCur ? 'cur' : x.done ? '' : 'cut'}" ${isCur ? `style="--c:${current.kind === 'stale' ? 'var(--ink-2)' : st.c}"` : ''}>
           <button class="row" data-open="${esc(x.id)}" aria-expanded="${open}">
             <span class="t">${hhmmMs(x.s)}–${isCur ? '' : hhmmMs(x.e)}</span>${cell(x.task)}
             <span class="q ${nf ? 'bad' : ''}">${nf ? `不合格 ${nf}` : `抽查 ${x.checks.length}`}</span>
             <span class="d">${isCur ? curMin : x.minutes} 分钟</span>
             <span class="s">${isCur ? `<span class="dot ${current.kind === 'live' ? 'live' : ''}" style="--c:${current.kind === 'stale' ? 'var(--mute)' : st.c}"></span>` : x.done ? ICON.check : ICON.minus}</span>
           </button>
-          ${open ? `<div class="more">${scrubHTML(isCur ? current : x, false, false, v)}</div>` : ''}
+          ${open ? `<div class="more">${scrubHTML(x, false, v)}</div>` : ''}
         </li>`;
       }).join('');
       log = `<section class="sec rule" aria-label="每一轮"><div class="sec-head"><span class="sec-title">每一轮</span><span class="sec-meta"><span>点开后拖动看抽查</span></span></div><ul class="log">${rows}</ul></section>`;
@@ -597,7 +1044,7 @@
   const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
   let last = { tab: null, key: null }, ind = null;
   function render() {
-    if (drag) return;
+    if (drag || G || TLG) return;
     const active = document.activeElement;
     const keepFocus = active && (active.id === 'cheerText' || active.id === 'visitorName');
     if (keepFocus) return;
@@ -607,6 +1054,8 @@
     last = { tab: S.tab, key };
     placeIndicator();
     document.querySelectorAll('.scrub').forEach(el => paintScrub(el, S.scrub[el.dataset.sid], false));
+    vpAfterRender();
+    if (document.getElementById('tl')) tlScan(S.tlAt ?? null);
     if (enter && S.tab === 'review' && !reduce) countUp();
     const inp = $('#visitorName') || $('#cheerText'); if (inp) inp.focus();
   }
@@ -690,6 +1139,9 @@
     const tab = t.closest('[data-tab]');
     if (tab) { S.tab = tab.dataset.tab; try { sessionStorage.setItem('fg-tab', S.tab); } catch (err) {} render(); return; }
     const jump = t.closest('[data-jump]');
+    if (jump && jump.dataset.jump.startsWith('vp|')) { const sec = Number(jump.dataset.jump.slice(3)); vpSelect(sec, false); vpReveal(sec); return; }
+    const vpb = t.closest('[data-vp]');
+    if (vpb) { touched(); const a = vpb.dataset.vp; if (a === 'fit') vpAnimTo(...fitRange()); else vpAnimTo(...vpZoom(a === 'in' ? 1 / 1.6 : 1.6, Math.min(Math.max(VP.sel, VP.v0), VP.v1))); return; }
     if (jump) { const [sid, sec] = jump.dataset.jump.split('|'); S.scrub[sid] = Number(sec); const el = document.querySelector(`.scrub[data-sid="${CSS.escape(sid)}"]`); if (el) paintScrub(el, Number(sec), false); return; }
     const src = t.closest('[data-src]');
     if (src) { S.src = src.dataset.src; render(); return; }
@@ -710,7 +1162,7 @@
       runAction(a.dataset.act);
     }
   });
-  window.addEventListener('resize', () => document.querySelectorAll('.scrub').forEach(el => paintScrub(el, S.scrub[el.dataset.sid], false)));
+  window.addEventListener('resize', () => document.querySelectorAll('.scrub').forEach(el => { el._w = 0; paintScrub(el, S.scrub[el.dataset.sid], false); }));
   window.addEventListener('hashchange', () => location.reload());
   setInterval(() => { if (!document.hidden) render(); }, 30000);
 
