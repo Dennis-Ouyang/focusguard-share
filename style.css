@@ -1,4 +1,4 @@
-/* FocusGuard 今日专注分享：朋友端样式（取自定稿设计稿第 12 版） */
+/* FocusGuard 今日专注分享：朋友端样式（取自定稿设计稿第 14 版） */
 :root {
   --bg: #F6F6F7;
   --surface: #FFFFFF;
@@ -17,6 +17,7 @@
   --pause: #C98A06;
   --rest: #2F7FE0;
   --fail: #E5484D;
+  --patrol: #E8780F;
   --mute: #9A9AA2;
   --accent: #2F7FE0;
   --shadow: 0 1px 0 rgba(17,17,22,.03), 0 12px 32px -18px rgba(17,17,22,.18);
@@ -51,7 +52,7 @@
     --bg: #0E0E10; --surface: #161618; --sunken: #121214; --ink: #EDEDF0; --ink-2: #B4B4BC; --ink-3: #7D7D86; --ink-4: #5C5C64;
     --line: rgba(255,255,255,.055); --line-2: rgba(255,255,255,.10); --wash: rgba(255,255,255,.035); --hover: rgba(255,255,255,.03);
     --block: rgba(237,237,240,.74); --block-dim: rgba(237,237,240,.2);
-    --focus: #45C072; --pause: #E7AE32; --rest: #5AA0F2; --fail: #FF6B6F; --mute: #6E6E76; --accent: #5AA0F2;
+    --focus: #45C072; --pause: #E7AE32; --rest: #5AA0F2; --fail: #FF6B6F; --patrol: #FF9440; --mute: #6E6E76; --accent: #5AA0F2;
     --shadow: 0 1px 0 rgba(255,255,255,.02) inset, 0 16px 40px -20px rgba(0,0,0,.7);
     --app-window: #1C1C1F; --app-card: #2A2A2D; --app-field: #323236; --app-text: #F2F2F5; --app-secondary: #A2A2AA; --app-caption: #8E8E96;
     --app-border: rgba(255,255,255,.07); --app-control: rgba(255,255,255,.10); --app-track: rgba(255,255,255,.16); --app-pop: rgba(38,38,41,.95); --app-titlebar: #232326;
@@ -63,7 +64,7 @@
   --bg: #0E0E10; --surface: #161618; --sunken: #121214; --ink: #EDEDF0; --ink-2: #B4B4BC; --ink-3: #7D7D86; --ink-4: #5C5C64;
   --line: rgba(255,255,255,.055); --line-2: rgba(255,255,255,.10); --wash: rgba(255,255,255,.035); --hover: rgba(255,255,255,.03);
   --block: rgba(237,237,240,.74); --block-dim: rgba(237,237,240,.2);
-  --focus: #45C072; --pause: #E7AE32; --rest: #5AA0F2; --fail: #FF6B6F; --mute: #6E6E76; --accent: #5AA0F2;
+  --focus: #45C072; --pause: #E7AE32; --rest: #5AA0F2; --fail: #FF6B6F; --patrol: #FF9440; --mute: #6E6E76; --accent: #5AA0F2;
   --shadow: 0 1px 0 rgba(255,255,255,.02) inset, 0 16px 40px -20px rgba(0,0,0,.7);
   --app-window: #1C1C1F; --app-card: #2A2A2D; --app-field: #323236; --app-text: #F2F2F5; --app-secondary: #A2A2AA; --app-caption: #8E8E96;
   --app-border: rgba(255,255,255,.07); --app-control: rgba(255,255,255,.10); --app-track: rgba(255,255,255,.16); --app-pop: rgba(38,38,41,.95); --app-titlebar: #232326;
@@ -444,7 +445,7 @@ button, input { font: inherit; color: inherit; }
 .vp { margin-top: 4px; display: grid; gap: 2px; }
 .vp-stage { position: relative; padding-top: 22px; touch-action: pan-y; user-select: none; -webkit-user-select: none; cursor: grab; }
 .vp-stage:active { cursor: grabbing; }
-.vp-stage canvas { display: block; width: 100%; height: 56px;
+.vp-stage canvas { display: block; width: 100%; height: 64px;
   -webkit-mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent); mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent); }
 .vp-head { top: 0; bottom: 20px; transition: opacity .2s; }
 .vp-head.off { opacity: 0; pointer-events: none; }
@@ -460,7 +461,7 @@ button, input { font: inherit; color: inherit; }
 .vp-tools { flex: none; }
 
 /* ---------- v8: timeline arrows, act badge, verse ---------- */
-.edge-hint { position: absolute; top: 39px; width: 18px; height: 26px; margin-top: -13px; border-radius: 7px; display: grid; place-items: center; pointer-events: none; z-index: 2;
+.edge-hint { position: absolute; top: 47px; width: 18px; height: 26px; margin-top: -13px; border-radius: 7px; display: grid; place-items: center; pointer-events: none; z-index: 2;
   color: var(--ink-3); background: var(--surface); box-shadow: 0 0 0 .5px var(--line-2), 0 1px 3px rgba(0,0,0,.06);
   transition: opacity .5s var(--ease), transform .5s var(--ease); }
 .edge-hint svg { width: 11px; height: 11px; }
@@ -508,6 +509,18 @@ button, input { font: inherit; color: inherit; }
 .scrub .tk.fail, .scrub .tk.friend { height: 18px; }
 .scrub .tk.excused { width: 3.5px; height: 15px; box-shadow: inset 0 0 0 1px var(--fail); }
 
+/* ---------- v13: 实时巡查 ---------- */
+.pdot { position: absolute; top: -8px; width: 5px; height: 5px; margin-left: -2.5px; border-radius: 50%; background: var(--patrol); }
+.tl.scan .pdot:not(.on) { opacity: .28; }
+.tl .pdot { transition: opacity .2s var(--ease); }
+.scrub .scrub-rail { height: 38px; }
+.scrub .pd { position: absolute; top: -1px; width: 5.5px; height: 5.5px; margin-left: -2.75px; border-radius: 50%; background: var(--patrol); pointer-events: none; transition: transform .2s var(--ease); }
+.scrub .pd.on { transform: scale(1.3); }
+.bubble.patrol { background: var(--patrol); color: #fff; }
+.vrow .tag.bad { color: var(--fail); }
+.vrow .tag.pat { color: var(--patrol); }
+.meta-line b.pat { color: var(--patrol); }
+
 /* ---------- live page additions ---------- */
 .head-id { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .avatar { width: 36px; height: 36px; border-radius: 50%; flex: none; object-fit: cover; background: var(--wash); box-shadow: 0 0 0 .5px var(--line-2); }
@@ -521,3 +534,8 @@ button, input { font: inherit; color: inherit; }
 @media (max-width: 480px) {
   .stage { min-height: 100vh; min-height: 100svh; align-items: center; padding-block: 16px; }
 }
+/* check rows: label and time never wrap; the reason wraps instead of being cut off */
+.brief { align-items: flex-start; }
+.brief > span:not(.why) { flex: none; white-space: nowrap; }
+.brief > .dot { margin-top: 6px; }
+.brief .why { white-space: normal; overflow: visible; text-overflow: clip; line-height: 1.55; }

@@ -164,6 +164,9 @@
       return { id: c.id, sec, ok: !!c.ok, friend: c.friend || null, fail, screen: c.screen, camera: c.camera, why: c.why, app: c.app };
     }).filter(c => !isNaN(c.sec)).sort((a, b) => a.sec - b.sec);
   }
+  const toPatrols = list => (list || []).map(p => ({ id: p.id, sec: Math.round(ms(p.at) / 1000), patrol: true, ok: true,
+    target: p.target || '', why: p.why || '', ban: p.ban || 0, screen: p.screen })).filter(p => !isNaN(p.sec));
+  const marksOf = sess => sess.checks.concat(sess.patrols || []).sort((a, b) => a.sec - b.sec);
   let viewCache = null;
   function view() {
     const d = S.data;
@@ -188,7 +191,7 @@
     (snap.fails || []).forEach(f => { fails[f.id] = { ...f, sec: Math.round(ms(f.at) / 1000) }; });
     const sessions = (snap.sessions || []).map(x => ({
       id: x.id, task: x.task, s: ms(x.start), e: ms(x.end), minutes: x.minutes, done: !!x.done, failLimit: x.failLimit || 4,
-      checks: toChecks(x.checks, fails)
+      checks: toChecks(x.checks, fails), patrols: toPatrols(x.patrols)
     })).filter(x => !isNaN(x.s) && !isNaN(x.e));
     const upd = ms(d.snapshot_at) || ms(snap.generatedAt);
     let key = snap.state;
@@ -199,10 +202,15 @@
     let current = null;
     if (snap.current && ['focus', 'pause', 'offline'].includes(key)) {
       const c = snap.current, s = ms(c.start);
-      const at = ms(c.at) || upd;
+      // while focusing, the round keeps running after the last sync: project it to this moment
+      const synced = ms(c.at) || upd;
+      const live = key === 'focus' ? Math.max(0, now - synced) : 0;
+      const elapsedSec = Math.min((c.elapsedSec || 0) + live / 1000, (c.planMin || Infinity) * 60);
+      const at = synced + live;
       current = {
         id: c.id || 'cur', task: c.task, s, e: at, at: Math.round(at / 1000), plan: c.planMin, failLimit: c.failLimit || 4,
-        elapsedMin: Math.floor((c.elapsedSec || 0) / 60),
+        elapsedMin: Math.floor(elapsedSec / 60),
+        patrols: toPatrols(c.patrols),
         kind: key === 'offline' ? 'stale' : key === 'pause' ? 'paused' : 'live',
         checks: toChecks(c.checks, fails)
       };
@@ -268,6 +276,17 @@
     </div>`;
   }
 
+  function patrolDetail(p, v) {
+    const pic = !v.perms.shots ? `<div class="shot-hidden"><span>${ICON.hidden}</span>伙伴没有公开截图</div>`
+      : safeURL(p.screen) ? `<div class="shot"><img src="${esc(p.screen)}" alt="屏幕截图" loading="lazy" referrerpolicy="no-referrer"></div>`
+      : `<div class="shot-hidden"><span>${ICON.hidden}</span>这次没有留下截图</div>`;
+    return `<div class="detail">
+      <div class="detail-top"><span class="dot" style="--c:var(--patrol)"></span><span class="verdict" style="color:var(--patrol)">实时巡查</span><span class="when">${hhmm(p.sec)}</span></div>
+      ${pic}
+      <dl class="facts"><dt>拦截</dt><dd>封禁 ${esc(p.target)} ${p.ban} 分钟</dd><dt>原因</dt><dd>${esc(p.why)}</dd></dl>
+    </div>`;
+  }
+
   /* ---------- per-round scrubber (今日回顾) ----------
      One set of ticks, every 30 s. A check takes over the tick nearest to it and is drawn wider;
      the slots around it stretch by exactly that extra width, so every gap on the rail stays the same.
@@ -279,7 +298,7 @@
     const start = Math.floor(sess.s / 1000);
     const end = Math.max(Math.floor(sess.e / 1000), start + 60);
     SCR[sid] = { sess, start, end, reached: end, live, v };
-    if (S.scrub[sid] == null || !sess.checks.some(c => c.sec === S.scrub[sid])) S.scrub[sid] = sess.checks.length ? sess.checks[sess.checks.length - 1].sec : start;
+    if (S.scrub[sid] == null || !marksOf(sess).some(c => c.sec === S.scrub[sid])) S.scrub[sid] = sess.checks.length ? sess.checks[sess.checks.length - 1].sec : start;
     const near = nearest(sid, S.scrub[sid]);
     return `<div class="scrub" data-sid="${esc(sid)}" style="--c:var(--block)">
         <div class="scrub-rail">
@@ -292,12 +311,13 @@
   function nearest(sid, sec) {
     const { sess } = SCR[sid];
     let best = null;
-    sess.checks.forEach(c => { if (!best || Math.abs(c.sec - sec) < Math.abs(best.sec - sec)) best = c; });
+    marksOf(sess).forEach(c => { if (!best || Math.abs(c.sec - sec) < Math.abs(best.sec - sec)) best = c; });
     return best;
   }
   function slotHTML(sid, c) {
     if (!c) return '';
     const { sess, live, v } = SCR[sid];
+    if (c.patrol) return patrolDetail(c, v);
     if (!c.ok) {
       const hits = realFails(sess.checks);
       const k = hits.indexOf(c);
@@ -334,11 +354,13 @@
     const xs = [x0];
     for (let j = 1; j < ts.length; j++) xs.push(xs[j - 1] + a + extra * (!!own[j - 1] + !!own[j]));
     cfg.ts = ts; cfg.xs = xs; cfg.W = W;
-    rail.querySelectorAll('.tk, .mt').forEach(n => n.remove());
+    rail.querySelectorAll('.tk, .mt, .pd').forEach(n => n.remove());
+    cfg.checkX = new Map();
     const head = rail.querySelector('.playhead');
     ts.forEach((t, j) => {
       const c = own[j], i = document.createElement('i');
       if (c) {
+        cfg.checkX.set(c.sec, xs[j]);
         i.className = `tk ${c.ok ? '' : c.fail.excused ? 'excused' : 'fail'} ${c.friend ? 'friend' : ''}`;
         i.dataset.sec = c.sec;
         i.dataset.h = !c.ok && !c.fail.excused || c.friend ? 18 : 15;
@@ -348,6 +370,12 @@
       }
       i.dataset.x = xs[j];
       i.style.left = xs[j].toFixed(2) + 'px';
+      rail.insertBefore(i, head);
+    });
+    (sess.patrols || []).forEach(pt => {
+      const i = document.createElement('i');
+      i.className = 'pd'; i.dataset.sec = pt.sec; i.style.left = scrubX(cfg, pt.sec).toFixed(2) + 'px';
+      cfg.checkX.set(pt.sec, scrubX(cfg, pt.sec));
       rail.insertBefore(i, head);
     });
   }
@@ -370,7 +398,8 @@
     if (!cfg) return;
     layoutScrub(el);
     if (!cfg.xs) return;
-    const hx = scrubX(cfg, sec), p = hx / cfg.W * 100;
+    const near0 = !dragging && nearest(sid, sec);
+    const hx = near0 && near0.sec === sec && cfg.checkX.has(sec) ? cfg.checkX.get(sec) : scrubX(cfg, sec), p = hx / cfg.W * 100;
     const head = el.querySelector('.playhead'), bubble = el.querySelector('.bubble');
     head.style.left = hx.toFixed(2) + 'px';
     bubble.style.transform = `translateX(-${Math.min(100, Math.max(0, p)).toFixed(1)}%)`;
@@ -382,11 +411,12 @@
       tk.style.setProperty('--s', (1 + 12 / Number(tk.dataset.h) * k * k * (3 - 2 * k)).toFixed(3));
       if (tk.classList.contains('tk')) tk.classList.toggle('on', !!near && Number(tk.dataset.sec) === near.sec);
     });
-    const snapped = near && Math.abs(scrubX(cfg, near.sec) - hx) < 7;
+    el.querySelectorAll('.pd').forEach(d => d.classList.toggle('on', !!near && near.patrol && Number(d.dataset.sec) === near.sec));
+    const snapped = near && Math.abs((cfg.checkX.get(near.sec) ?? scrubX(cfg, near.sec)) - hx) < 7;
     bubble.textContent = hhmm(dragging ? sec : near ? near.sec : sec);
-    bubble.className = 'bubble' + (snapped && near && !near.ok ? ' fail' : snapped && near && near.friend ? ' friend' : '');
+    bubble.className = 'bubble' + (snapped && near && near.patrol ? ' patrol' : snapped && near && !near.ok ? ' fail' : snapped && near && near.friend ? ' friend' : '');
     head.setAttribute('aria-valuenow', Math.round(sec));
-    head.setAttribute('aria-valuetext', `${hhmm(sec)}${near ? (near.ok ? ' 合格' : ' 不合格') : ''}`);
+    head.setAttribute('aria-valuetext', `${hhmm(sec)}${near ? (near.patrol ? ' 实时巡查' : near.ok ? ' 合格' : ' 不合格') : ''}`);
     const slot = document.querySelector(`[data-slot="${CSS.escape(sid)}"]`);
     if (slot && near && slot.dataset.cid !== near.id) {
       slot.dataset.cid = near.id;
@@ -423,7 +453,7 @@
   document.addEventListener('keydown', e => {
     const head = e.target.closest && e.target.closest('.scrub .playhead');
     if (!head) return;
-    const el = head.closest('.scrub'), sid = el.dataset.sid, checks = SCR[sid].sess.checks;
+    const el = head.closest('.scrub'), sid = el.dataset.sid, checks = marksOf(SCR[sid].sess);
     if (!checks.length) return;
     let i = checks.findIndex(c => c.sec === S.scrub[sid]);
     if (e.key === 'ArrowRight') i = Math.min(checks.length - 1, i + 1);
@@ -455,7 +485,7 @@
       at = current.at;
       spans.push({ s: start, e: at, k: key === 'offline' ? 'stale' : 'cur' });
       if (key === 'pause') spans.push({ s: at, e: nowSec, k: 'paused' });
-      projEnd = start + (current.plan || current.elapsedMin) * 60 + (key === 'pause' ? Math.max(0, nowSec - at) : 0);
+      projEnd = Math.max(start + (current.plan || current.elapsedMin) * 60 + (key === 'pause' ? Math.max(0, nowSec - at) : 0), at);
       spans.push({ s: key === 'pause' ? nowSec : at, e: projEnd, k: 'plan' });
       current.checks.forEach(c => { c.sess = current; checks.push(c); });
     } else {
@@ -463,10 +493,13 @@
       start = focusSess.s / 1000; projEnd = focusSess.e / 1000;
     }
     checks.sort((a, b) => a.sec - b.sec);
-    return { key, spans, checks, start, projEnd, nowSec, at, current, focusSess, day0: v.dayStart / 1000, day1: v.dayEnd / 1000,
+    const patrols = sessions.concat(current ? [current] : []).flatMap(x => (x.patrols || []).map(p => Object.assign(p, { sess: x })));
+    const marks = checks.concat(patrols).sort((a, b) => a.sec - b.sec);
+    return { key, spans, checks, patrols, marks, start, projEnd, nowSec, at, current, focusSess, day0: v.dayStart / 1000, day1: v.dayEnd / 1000,
       colorVar: STATES[key].c.slice(4, -1), live: key === 'focus', v };
   }
-  const fitRange = () => { const pad = (VD.projEnd - VD.start) * .14; return [VD.start - pad, VD.projEnd + pad]; };
+  // fit the whole round as of this moment: from its start to whichever is later, the projected end or now
+  const fitRange = () => { const end = Math.max(VD.projEnd, VD.current ? VD.nowSec : VD.start), pad = (end - VD.start) * .14; return [VD.start - pad, end + pad]; };
   const vpBounds = () => [VD.day0, Math.min(VD.day1, Math.max(VD.projEnd, VD.nowSec) + 3600)];
   function clampView(v0, v1) {
     const [lo, hi] = vpBounds();
@@ -486,13 +519,13 @@
       [VP.v0, VP.v1] = fitRange();
       const own = VD.focusSess.checks;
       VP.sel = own.length ? own[own.length - 1].sec : VD.start;
-    } else if (!VD.checks.some(c => c.sec === VP.sel) && VD.focusSess.checks.length) {
+    } else if (!VD.marks.some(c => c.sec === VP.sel) && VD.focusSess.checks.length) {
       VP.sel = VD.focusSess.checks[VD.focusSess.checks.length - 1].sec;
     }
     const c = nearestAll(VP.sel);
     return `<div class="vp" id="vp" style="--c:${STATES[v.key].c}">
         <div class="vp-stage" id="vpStage">
-          <canvas id="vpCanvas" height="56" aria-hidden="true"></canvas>
+          <canvas id="vpCanvas" height="64" aria-hidden="true"></canvas>
           <i class="edge-hint l ${VP.touched ? 'gone' : ''}" aria-hidden="true">${ARROW_L}</i><i class="edge-hint r ${VP.touched ? 'gone' : ''}" aria-hidden="true">${ARROW_R}</i>
           <div class="playhead vp-head" id="vpHead" tabindex="0" role="slider" aria-label="选择一次抽查" aria-valuetext="${hhmm(VP.sel)}"><span class="bubble" id="vpBubble">${hhmm(VP.sel)}</span><i class="head-hint l ${VP.headTouched ? 'gone' : ''}" aria-hidden="true">${ARROW_L}</i><i class="head-hint r ${VP.headTouched ? 'gone' : ''}" aria-hidden="true">${ARROW_R}</i></div>
         </div>
@@ -507,7 +540,7 @@
   }
   function nearestAll(sec) {
     let best = null;
-    VD.checks.forEach(c => { if (!best || Math.abs(c.sec - sec) < Math.abs(best.sec - sec)) best = c; });
+    VD.marks.forEach(c => { if (!best || Math.abs(c.sec - sec) < Math.abs(best.sec - sec)) best = c; });
     return best;
   }
   function vpSlotHTML(c) {
@@ -521,14 +554,15 @@
   function vpDraw() {
     const cv = document.getElementById('vpCanvas');
     if (!cv || !VD) return;
-    const W = cv.clientWidth, H = 56, dpr = window.devicePixelRatio || 1;
+    const W = cv.clientWidth, H = 64, dpr = window.devicePixelRatio || 1;
     if (!W) return;
     if (cv.width !== Math.round(W * dpr)) { cv.width = Math.round(W * dpr); cv.height = H * dpr; }
     const g = cv.getContext('2d');
     g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, H);
-    const C = { c: cssVar(cv, VD.colorVar), ink: cssVar(cv, '--ink'), ink2: cssVar(cv, '--ink-2'), ink4: cssVar(cv, '--ink-4'), fail: cssVar(cv, '--fail'), accent: cssVar(cv, '--accent'), pause: cssVar(cv, '--pause'), font: cssVar(cv, '--sans') };
-    const spp = (VP.v1 - VP.v0) / W, X = t => (t - VP.v0) / spp, mid = 17;
-    const hx = X(VP.sel);
+    const C = { c: cssVar(cv, VD.colorVar), ink: cssVar(cv, '--ink'), ink2: cssVar(cv, '--ink-2'), ink4: cssVar(cv, '--ink-4'), fail: cssVar(cv, '--fail'), accent: cssVar(cv, '--accent'), patrol: cssVar(cv, '--patrol'), pause: cssVar(cv, '--pause'), font: cssVar(cv, '--sans') };
+    const spp = (VP.v1 - VP.v0) / W, X = t => (t - VP.v0) / spp, mid = 25;
+    let hx = X(VP.sel);
+    const centers = new Map();
     const lift = px => { const k = Math.max(0, 1 - Math.abs(px - hx) / 60); return k * k * (3 - 2 * k); };
     const spanAt = t => { for (let i = VD.spans.length - 1; i >= 0; i--) { const s = VD.spans[i]; if (t >= s.s && t <= s.e) return s.k; } return null; };
     const step = PITCH * spp;
@@ -564,6 +598,7 @@
       if (!c && own.has(i - 1) && em === 0) continue;
       if (c) {
         const xa = x, xb = snap(t + step), cx = (xa + xb) / 2, cw = xb - xa + .5;
+        centers.set(c, cx);
         const fail = !c.ok && !c.fail.excused, exc = !c.ok && c.fail.excused;
         const col = fail || exc ? C.fail : c.friend ? C.accent : C.ink2;
         const h0 = (fail || c.friend ? 18 : 15) + 10 * (lf - 1), keep = fail || exc || c.friend;
@@ -586,6 +621,18 @@
       bar(x0, mid - BLK / 2, Math.max(2, x1 - x0), BLK, 3);
     });
     flags.forEach(([x, h, w, col, exc, a]) => { g.globalAlpha = a; drawCheck(x, h, w, col, exc); });
+    // 实时巡查 sits above the rail as an orange dot
+    const selMark = VD.marks.find(c => c.sec === VP.sel);
+    VD.patrols.forEach(pt => {
+      const px = X(pt.sec);
+      if (px < -6 || px > W + 6) return;
+      const on = selMark === pt;
+      g.globalAlpha = pt.sess === VD.focusSess || on ? 1 : .7; g.fillStyle = C.patrol;
+      g.beginPath(); g.arc(px, 5, on ? 3.5 : 2.75, 0, Math.PI * 2); g.fill();
+    });
+    // resting on a check, the pointer sits on that tick's centre rather than its exact second
+    if (!VP.free && selMark && centers.has(selMark)) hx = centers.get(selMark);
+    VP.hx = hx;
     const nx = X(VD.nowSec);
     if (nx > -2 && nx < W + 2) {
       g.globalAlpha = .9; g.fillStyle = C.ink;
@@ -610,15 +657,15 @@
   }
 
   function vpSelect(sec, free) {
-    VP.sel = sec;
+    VP.sel = sec; VP.free = !!free;
     const c = nearestAll(sec);
     const bubble = document.getElementById('vpBubble'), head = document.getElementById('vpHead');
     if (!bubble) return;
     const cv = document.getElementById('vpCanvas'), spp = (VP.v1 - VP.v0) / (cv.clientWidth || 1);
     const snapped = c && Math.abs(c.sec - sec) / spp < 7;
     bubble.textContent = hhmm(free ? sec : c ? c.sec : sec);
-    bubble.className = 'bubble' + (snapped && !c.ok ? ' fail' : snapped && c.friend ? ' friend' : '');
-    head.setAttribute('aria-valuetext', `${hhmm(sec)}${c ? (c.ok ? ' 合格' : ' 不合格') : ''}`);
+    bubble.className = 'bubble' + (snapped && c.patrol ? ' patrol' : snapped && !c.ok ? ' fail' : snapped && c.friend ? ' friend' : '');
+    head.setAttribute('aria-valuetext', `${hhmm(sec)}${c ? (c.patrol ? ' 实时巡查' : c.ok ? ' 合格' : ' 不合格') : ''}`);
     const slot = document.getElementById('vpSlot');
     if (slot && c && slot.dataset.cid !== c.id) {
       slot.dataset.cid = c.id;
@@ -677,7 +724,7 @@
     if (ptrs.size === 2) {
       const [a, b] = [...ptrs.values()];
       G = { type: 'pinch', d0: Math.max(20, Math.abs(a - b)), span0: VP.v1 - VP.v0, anchor: timeAtX(st, (a + b) / 2), st };
-    } else if (e.target.closest('#vpHead')) {
+    } else if (e.target.closest('#vpHead') || Math.abs(stageX(st, e.clientX) - (VP.hx ?? -999)) < 26) {
       G = { type: 'head', st }; headTouched();
       st.classList.add('dragging');
     } else {
@@ -749,8 +796,8 @@
     }
   }, { passive: false });
   document.addEventListener('keydown', e => {
-    if (!e.target.closest || !e.target.closest('#vpHead') || !VD.checks.length) return;
-    const list = VD.checks;
+    if (!e.target.closest || !e.target.closest('#vpHead') || !VD.marks.length) return;
+    const list = VD.marks;
     let i = list.findIndex(c => c.sec === VP.sel);
     if (e.key === 'ArrowRight') i = Math.min(list.length - 1, i + 1);
     else if (e.key === 'ArrowLeft') i = Math.max(0, i - 1);
@@ -798,6 +845,7 @@
       if ((key === 'focus' || key === 'pause') && current.plan) meta.push(`预计 <b id="vpEnd">${hhmm(VD.projEnd)}</b> 结束`);
       meta.push(`抽查 <b>${sess.checks.length}</b> 次`);
       if (nFail) meta.push(`不合格 <b class="bad">${nFail}</b> 次`);
+      if ((sess.patrols || []).length) meta.push(`拦截 <b class="pat">${sess.patrols.length}</b> 次`);
       hero = `${row(key === 'rest' ? `${hhmmMs(last.e)} 起` : '')}${taskH(sess.task, key === 'offline')}
         <div class="meta-line">${meta.map(m => `<span>${m}</span>`).join('')}</div>
         ${vh}${aside}`;
@@ -977,19 +1025,27 @@
       log = `<section class="sec rule" aria-label="每一轮"><div class="sec-head"><span class="sec-title">每一轮</span><span class="sec-meta"><span>点开后拖动看抽查</span></span></div><ul class="log">${rows}</ul></section>`;
     }
 
-    const vs = all.flatMap(x => x.checks.filter(c => !c.ok).map(c => c));
+    const vs = all.flatMap(x => x.checks.filter(c => !c.ok).concat(x.patrols || [])).sort((a, b) => a.sec - b.sec);
     const vrows = vs.map(c => {
       const open = S.vopen === c.id;
+      if (c.patrol) {
+        const pimg = perms.shots && safeURL(c.screen);
+        const thumb = pimg ? `<span class="thumb"><img src="${esc(pimg)}" alt="" loading="lazy" referrerpolicy="no-referrer"></span>` : `<span class="thumb blank">${ICON.hidden}</span>`;
+        return `<li><button class="vrow" data-vopen="${esc(c.id)}" aria-expanded="${open}">${thumb}
+          <span style="min-width:0"><span class="v1" style="display:block">封禁 ${esc(c.target)} ${c.ban} 分钟</span><span class="v2">${hhmm(c.sec)}  ${esc(c.why)}</span></span>
+          <span class="tag pat">已拦截</span></button>
+        ${open ? `<div class="more">${patrolDetail(c, v)}</div>` : ''}</li>`;
+      }
       const f = c.fail;
       const img = safeURL(f.screen) || safeURL(f.camera);
       const isCam = !safeURL(f.screen) && !!safeURL(f.camera);
       const thumb = perms.shots && img ? `<span class="thumb ${isCam ? 'cam' : ''}"><img src="${esc(img)}" alt="" loading="lazy" referrerpolicy="no-referrer"></span>` : `<span class="thumb blank">${ICON.hidden}</span>`;
       return `<li><button class="vrow" data-vopen="${esc(c.id)}" aria-expanded="${open}">${thumb}
           <span style="min-width:0"><span class="v1" style="display:block">${esc(f.why)}</span><span class="v2">${hhmm(c.sec)}  ${esc(f.app)}</span></span>
-          <span class="tag ${f.excused ? 'ok' : ''}">${f.excused ? '申诉通过' : /提前结束/.test(f.result || '') ? '本轮结束' : '已处理'}</span></button>
+          <span class="tag ${f.excused ? 'ok' : 'bad'}">${f.excused ? '申诉通过' : '不合格'}</span></button>
         ${open ? `<div class="more">${detail(c, false, v)}</div>` : ''}</li>`;
     }).join('');
-    const vsec = vs.length ? `<section class="sec rule" aria-label="不合格记录"><div class="sec-head"><span class="sec-title">不合格记录</span><span class="sec-meta"><span>${vs.length} 次</span></span></div><ul class="vlist">${vrows}</ul></section>` : '';
+    const vsec = vs.length ? `<section class="sec rule" aria-label="违规与拦截"><div class="sec-head"><span class="sec-title">违规与拦截</span><span class="sec-meta"><span>${vs.length} 次</span></span></div><ul class="vlist">${vrows}</ul></section>` : '';
 
     const visits = (S.data.visits || []).map(visitLine).filter(Boolean);
     const vis = visits.length ? `<section class="sec rule" aria-label="朋友来访"><div class="sec-head"><span class="sec-title">朋友来访</span></div>
