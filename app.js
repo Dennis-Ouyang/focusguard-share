@@ -10,6 +10,7 @@
     eye: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M1.8 8S4 3.8 8 3.8 14.2 8 14.2 8 12 12.2 8 12.2 1.8 8 1.8 8Z"/><circle cx="8" cy="8" r="2"/></svg>',
     spark: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.2v2.6M8 11.2v2.6M2.2 8h2.6M11.2 8h2.6M4 4l1.7 1.7M10.3 10.3 12 12M4 12l1.7-1.7M10.3 5.7 12 4"/></svg>',
     load: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 2.2a5.8 5.8 0 1 1-5.8 5.8"/></svg>',
+    x: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/></svg>',
     hidden: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M2.5 2.5l11 11M6.4 4.1A6.6 6.6 0 0 1 8 3.8c4 0 6.2 4.2 6.2 4.2a10 10 0 0 1-1.6 2.1M4.2 5.4C2.7 6.6 1.8 8 1.8 8s2.2 4.2 6.2 4.2c.9 0 1.7-.2 2.4-.5"/></svg>'
   };
 
@@ -109,7 +110,8 @@
         if (d && d.status === 'locked' && sharePassword()) setPassword('');
         if (d && d.now) skew = Date.parse(d.now) - Date.now();
         if (d && d.snapshot && d.snapshot.tz) TZ = d.snapshot.tz;
-        S.data = d; S.loaded = true; S.error = '';
+        S.data = d; S.loaded = true; if (!modalStep()) S.error = '';
+        trackWatched();
         if (d && d.channel) realtime(d.channel);
       } catch (e) {
         S.loaded = true;
@@ -126,7 +128,7 @@
   function schedule() {
     clearTimeout(pollTimer);
     if (document.hidden) return;
-    const pending = mine().some(a => a.status === 'pending');
+    const pending = mine().some(a => a.status === 'pending' || a.status === 'judging');
     const live = ['focus', 'pause', 'rest'].includes(view().key);
     pollTimer = setTimeout(load, pending ? 8000 : live ? 60000 : 180000);
   }
@@ -167,7 +169,7 @@
       const sec = Math.round(ms(c.at) / 1000);
       const fail = c.ok ? null : (fails[c.id] || { id: c.id, app: '', why: '不合格', result: '', excused: !!c.excused });
       if (fail && c.excused) fail.excused = true;
-      return { id: c.id, sec, ok: !!c.ok, friend: c.friend || null, fail, screen: c.screen, camera: c.camera, why: c.why, app: c.app };
+      return { id: c.id, sec, ok: !!c.ok, friend: c.friend || null, judge: c.judge || null, fail, screen: c.screen, camera: c.camera, why: c.why, app: c.app };
     }).filter(c => !isNaN(c.sec)).sort((a, b) => a.sec - b.sec);
   }
   const toPatrols = list => (list || []).map(p => ({ id: p.id, sec: Math.round(ms(p.at) / 1000), patrol: true, ok: true,
@@ -257,16 +259,16 @@
     const t = hhmm(c.sec);
     if (c.ok) {
       return `<div class="detail">
-        <div class="detail-top"><span class="dot" style="--c:var(--accent)"></span><span class="verdict">合格</span><span class="when">${t}  ${esc(c.friend)}发起的抽查</span></div>
+        <div class="detail-top"><span class="dot" style="--c:var(--accent)"></span><span class="verdict">合格</span><span class="when">${t}  ${esc(c.friend)}发起${c.judge && c.judge !== 'ai' ? `，${esc(c.judge)}判定` : c.judge === 'ai' ? '，超时由 AI 判定' : '的抽查'}</span></div>
         ${shot(c, v.perms)}
         <dl class="facts">${c.app ? `<dt>前台应用</dt><dd>${esc(c.app)}</dd>` : ''}<dt>判定</dt><dd>${esc(c.why || '屏幕内容与当前任务相关')}</dd></dl>
       </div>`;
     }
     const f = c.fail;
     return `<div class="detail">
-      <div class="detail-top"><span class="dot" style="--c:var(--fail)"></span><span class="verdict" style="color:var(--fail)">${f.excused ? '不合格，已申诉' : '不合格'}</span><span class="when">${t}${c.friend ? `  ${esc(c.friend)}发起的抽查` : ''}</span></div>
+      <div class="detail-top"><span class="dot" style="--c:var(--fail)"></span><span class="verdict" style="color:var(--fail)">${f.excused ? '不合格，已申诉' : '不合格'}</span><span class="when">${t}${f.judge ? `  ${esc(f.judge)}判定` : c.friend ? `  ${esc(c.friend)}发起的抽查` : ''}</span></div>
       ${shot(f, v.perms)}
-      <dl class="facts">${f.app ? `<dt>前台应用</dt><dd>${esc(f.app)}</dd>` : ''}<dt>判定</dt><dd>${esc(f.why)}</dd>${f.result ? `<dt>处理</dt><dd class="${f.excused ? 'ok' : ''}">${esc(f.result)}</dd>` : ''}</dl>
+      <dl class="facts">${f.app ? `<dt>前台应用</dt><dd>${esc(f.app)}</dd>` : ''}<dt>${f.judge ? '理由' : '判定'}</dt><dd>${esc(f.why)}</dd>${f.result ? `<dt>处理</dt><dd class="${f.excused ? 'ok' : ''}">${esc(f.result)}</dd>` : ''}</dl>
       ${live && v.perms.acts && !f.excused ? proposeBlock(f) : ''}
     </div>`;
   }
@@ -290,7 +292,7 @@
       return `<div class="propose in"><div class="status-line"><span class="dot ${live ? 'live' : ''}" style="--c:${c}"></span>${esc(txt)}</div></div>`;
     }
     return `<div class="propose" data-fail="${esc(f.id)}">
-      <div class="propose-head"><span class="propose-title">追加惩罚</span><span class="propose-sub">尽管当时的惩罚或许已经结束，你仍可以追加以下惩罚。</span></div>
+      <div class="propose-head"><span class="propose-title">追加惩罚</span><span class="propose-sub">你仍可以追加以下惩罚。</span></div>
       <div class="puns" role="radiogroup" aria-label="选择惩罚">${PUNS.map(p => `
         <label class="pun ${S.pun === p.k ? 'on' : ''}" data-pun="${p.k}"><input type="radio" name="pun" value="${p.k}" ${S.pun === p.k ? 'checked' : ''}><span class="radio"></span><span class="pl">${esc(p.label(f))}</span>
           ${S.pun === p.k ? `<span class="chips in" role="group">${p.opts.map(n => `<button type="button" data-amt="${p.k}:${n}" aria-pressed="${S.amt[p.k] === n}">${n} ${p.unit}</button>`).join('')}</span>` : ''}</label>`).join('')}
@@ -898,32 +900,17 @@
     const canCheck = key === 'focus';
     const head = `<div class="sec-head"><span class="sec-title">和伙伴互个动</span>${S.visitor ? `<span class="sec-meta"><span>${esc(S.visitor)}</span></span>` : ''}</div>`;
     const err = S.error ? `<span class="err-line">${esc(S.error)}</span>` : '';
-    if (S.asking) {
-      return `<section class="sec rule" aria-label="和伙伴互动">${head}
-        <form class="who-ask in" id="askForm"><label for="visitorName">先留一个称呼！</label><span class="who-ask-r">
-          <input id="visitorName" maxlength="12" placeholder="比如 小林" autocomplete="nickname">
-          <button class="btn-w solid" type="submit">好了</button></span></form></section>`;
-    }
-    if (S.cheerOpen) {
-      const presets = key === 'empty' ? NUDGES : CHEERS;
-      return `<section class="sec rule" aria-label="和伙伴互动">${head}
-        <form class="composer in" id="cheerForm">
-          <textarea id="cheerText" maxlength="60" placeholder="${key === 'empty' ? '叫 TA 一声' : '写一句想对 TA 说的话'}" aria-label="想说的话">${esc(S.cheerDraft)}</textarea>
-          <div class="presets">${presets.map(p => `<button type="button" class="preset" data-preset="${esc(p)}">${esc(p)}</button>`).join('')}</div>
-          <div class="composer-foot"><span id="cheerCount">${S.cheerDraft.length} / 60</span>
-            <span style="display:flex;gap:6px"><button type="button" class="btn-w ghosty" data-act="cheer-cancel">取消</button><button class="btn-w solid" type="submit" ${S.busy === 'cheer' ? 'disabled' : ''}>送出</button></span></div>
-        </form>${err}</section>`;
-    }
     const checks = mine().filter(a => a.kind === 'check');
     const lastCheck = checks[checks.length - 1];
     const running = S.busy === 'check' || (lastCheck && lastCheck.status === 'pending' && nowMs() - ms(lastCheck.at) < 5 * 60000);
     const left = S.data.checks_left;
     let checkDesc = '看看 TA 此刻在做什么？';
     if (running) checkDesc = '截一张图，交给 AI 看看';
+    else if (judgingCheck()) checkDesc = '等你判定';
     else if (lastCheck && lastCheck.status === 'done' && nowMs() - ms(lastCheck.at) < 10 * 60000) checkDesc = '结果在上面';
     else if (lastCheck && lastCheck.status === 'failed' && nowMs() - ms(lastCheck.at) < 10 * 60000) checkDesc = '这次没查成，稍后再试试';
     const checkCard = canCheck ? `
-      <button class="act ${running ? 'busy' : ''}" data-act="check" ${running || !left ? 'disabled' : ''}>
+      <button class="act ${running ? 'busy' : ''}" data-act="${judgingCheck() ? 'judge-open' : 'check'}" ${running || (!left && !judgingCheck()) ? 'disabled' : ''}>
         <span class="act-t">${running ? ICON.load : ICON.eye}${running ? '正在抽查' : '立即抽查'}<span class="act-n">${left ? `可查 ${left} 次` : '今天已查完'}</span></span>
         <span class="act-d">${checkDesc}</span>
       </button>` : '';
@@ -1096,6 +1083,123 @@
     return `<li><span class="t">${hhmmMs(ms(a.at))}</span><span>${esc(a.visitor)}${esc(what)}</span></li>`;
   }
 
+  /* ---------- interaction sheet: every step of cheering and checking happens here ---------- */
+  let MODAL_LAST = null;
+  // the visitor's own check that is waiting for their verdict, if any
+  const judgingCheck = () => mine().filter(a => a.kind === 'check' && a.status === 'judging' && a.result && ms(a.result.deadline) > nowMs()).pop() || null;
+  const watchedCheck = () => S.watch ? mine().find(a => a.id === S.watch) : null;
+  function modalStep() {
+    if (S.asking) return 'ask';
+    if (S.cheerOpen) return 'cheer';
+    if (S.done) return S.done;
+    const w = watchedCheck();
+    if (S.busy === 'check' || (w && w.status === 'pending')) return 'running';
+    if (S.judgeOpen && judgingCheck()) return S.jbad ? 'judge-why' : 'judge';
+    return null;
+  }
+  function jLeftText() {
+    const j = judgingCheck(); if (!j) return '';
+    const left = Math.max(0, Math.floor((ms(j.result.deadline) - nowMs()) / 1000));
+    return `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')} 内不判定，按 AI 结果`;
+  }
+  setInterval(() => { const el = document.getElementById('jLeft'); if (el) el.textContent = jLeftText(); }, 1000);
+  function modalHTML(v) {
+    const step = modalStep();
+    if (!step) { MODAL_LAST = null; return ''; }
+    const anim = MODAL_LAST == null ? 'm-open' : MODAL_LAST !== step ? 'm-step' : '';
+    MODAL_LAST = step;
+    const key = v.key;
+    const closable = ['ask', 'cheer', 'judge'].includes(step) || step.startsWith('ok-');
+    const close = closable ? `<button class="m-x" data-mclose aria-label="关闭">${ICON.x}</button>` : '';
+    const err = S.error ? `<p class="judge-note" style="color:var(--fail)">${esc(S.error)}</p>` : '';
+    let body = '';
+    if (step === 'ask') {
+      body = `<h3 class="m-t">先留一个称呼！</h3><p class="m-d">伙伴会看到是谁来过</p>
+        <form class="m-form" id="askForm"><input id="visitorName" maxlength="12" placeholder="比如 小林" autocomplete="nickname">
+          <button class="btn-w solid m-main" type="submit">好了</button></form>`;
+    } else if (step === 'cheer') {
+      const presets = key === 'empty' ? NUDGES : CHEERS;
+      body = `<h3 class="m-t">${key === 'empty' ? '提醒 TA 开始' : '为 TA 打气'}</h3>
+        <form class="composer m-form" id="cheerForm">
+          <textarea id="cheerText" maxlength="60" placeholder="${key === 'empty' ? '叫 TA 一声' : '写一句想对 TA 说的话'}" aria-label="想说的话">${esc(S.cheerDraft)}</textarea>
+          <div class="presets">${presets.map(p => `<button type="button" class="preset" data-preset="${esc(p)}">${esc(p)}</button>`).join('')}</div>
+          <div class="composer-foot"><span id="cheerCount">${S.cheerDraft.length} / 60</span><button class="btn-w solid" type="submit" ${S.busy === 'cheer' ? 'disabled' : ''}>送出</button></div>
+        </form>${err}`;
+    } else if (step === 'running') {
+      body = `<h3 class="m-t">正在抽查</h3><p class="m-d">${v.perms.judge ? '截一张图，马上交给你来看' : '截一张图，交给 AI 看看'}</p>
+        <div class="m-scan"><i></i></div>`;
+    } else if (step === 'judge' || step === 'judge-why') {
+      const j = judgingCheck(), res = j.result || {};
+      const rs = ['在刷视频', '在聊天', '不在电脑前', '在做别的事'];
+      const shotHTML = safeURL(res.screen) ? `<img src="${esc(res.screen)}" alt="屏幕截图" referrerpolicy="no-referrer" style="display:block;width:100%;height:100%;object-fit:cover">`
+        : `<div class="shot-hidden"><span>${ICON.hidden}</span>伙伴没有公开截图</div>`;
+      body = `<div class="m-head"><h3 class="m-t">由你来判定</h3><span class="m-meta" id="jLeft">${jLeftText()}</span></div>
+        <div class="judge-shot">${shotHTML}<span class="judge-time">${hhmmMs(ms(j.at))}</span></div>
+        <dl class="facts">${res.app ? `<dt>前台应用</dt><dd>${esc(res.app)}</dd>` : ''}<dt>任务</dt><dd>${esc(res.task || SECRET)}</dd>${res.ai_why ? `<dt>AI 参考</dt><dd class="muted">${esc(res.ai_why)}</dd>` : ''}</dl>
+        ${step === 'judge-why' ? `<form class="judge-why" id="judgeForm">
+            <div class="presets">${rs.map(x => `<button type="button" class="preset ${S.freason === x ? 'on' : ''}" data-reason="${x}">${x}</button>`).join('')}</div>
+            <input id="judgeText" maxlength="30" placeholder="或者写一句理由" value="${esc(rs.includes(S.freason) ? '' : S.freason)}">
+            <p class="judge-note">会计入 TA 本轮的失误，TA 可以申诉</p>
+            <div class="judge-acts"><button type="button" class="btn-w ghosty" data-judge="back">返回</button><button class="btn-w bad" type="submit" ${S.freason && S.busy !== 'judge' ? '' : 'disabled'}>确认违规</button></div>
+          </form>` : `<div class="judge-acts"><button class="btn-w judge-ok" data-judge="ok" ${S.busy === 'judge' ? 'disabled' : ''}>${ICON.check}合格</button><button class="btn-w judge-bad" data-judge="bad">违规</button></div>`}${err}`;
+    } else {
+      const R = {
+        'ok-cheer': ['🎉', '成功！', key === 'empty' ? '伙伴马上就会收到你的提醒！' : '伙伴在结束后就可以看到你的加油与祝福了！'],
+        'ok-judge': ['👍', '判定为合格', '伙伴会看到这次是你判的，继续加油！'],
+        'ok-bad': ['🚩', '已记为违规', '伙伴会收到通知，TA 可以申诉。你还可以追加惩罚。'],
+        'ok-check': ['🔍', '抽查完成', '结果已经放在时间轴上了。'],
+        'ok-failed': ['😶', '这次没查成', '伙伴那边没能完成抽查，稍后再试试。']
+      }[step];
+      body = `<div class="m-done"><span class="m-emoji" aria-hidden="true">${R[0]}${step === 'ok-cheer' ? '<i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>' : ''}</span>
+        <h3 class="m-t">${R[1]}</h3><p class="m-d">${R[2]}</p><button class="btn-w solid m-main" data-mclose>好的</button></div>`;
+    }
+    return `<div class="m-layer ${anim === 'm-open' ? 'm-open' : ''}" role="presentation" ${closable ? 'data-mback' : ''}>
+      <div class="m-card ${anim}" role="dialog" aria-modal="true">${close}<div class="m-body">${body}</div></div></div>`;
+  }
+  // the sheet lives outside the card and is only rebuilt when its content changes, so its animations play once
+  let MODAL_SIG = null;
+  function renderModal() {
+    let host = document.getElementById('modal');
+    if (!host) { host = document.createElement('div'); host.id = 'modal'; document.body.appendChild(host); }
+    const v = S.data ? view() : null;
+    const ok = v && !['loading', 'missing', 'ended', 'locked'].includes(v.key);
+    const step = ok ? modalStep() : null;
+    const sig = step ? `${step}|${S.error}|${S.busy}|${(judgingCheck() || {}).id || ''}` : '';
+    if (sig === MODAL_SIG) return;
+    MODAL_SIG = sig;
+    host.innerHTML = step ? modalHTML(v) : '';
+    if (!step) MODAL_LAST = null;
+    const inp = host.querySelector('#visitorName, #cheerText');
+    if (inp) { inp.focus(); const end = inp.value.length; try { inp.setSelectionRange(end, end); } catch (e) {} }
+  }
+  function closeModal() {
+    const l = document.querySelector('.m-layer');
+    const done = () => { S.asking = null; S.cheerOpen = false; S.done = null; S.judgeOpen = false; S.jbad = false; S.error = ''; MODAL_LAST = null; render(); };
+    if (l && !reduce) { l.classList.add('m-out'); setTimeout(done, 200); } else done();
+  }
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && document.querySelector('[data-mback]')) closeModal(); });
+  // follow the watched check: running → (friend judges) → result
+  function trackWatched() {
+    const w = watchedCheck();
+    if (!w) return;
+    if (w.status === 'judging') { S.watch = null; S.judgeOpen = true; S.jbad = false; S.freason = ''; }
+    else if (w.status === 'done') { S.watch = null; S.done = 'ok-check'; }
+    else if (w.status === 'failed') { S.watch = null; S.done = 'ok-failed'; }
+  }
+  async function submitVerdict(verdict) {
+    const j = judgingCheck(); if (!j) return;
+    S.busy = 'judge'; S.error = ''; render();
+    try {
+      await rpc('fg_friend_verdict', { p_code: code, p_visitor_key: visitorKey, p_id: j.id, p_verdict: verdict,
+        p_reason: verdict === 'bad' ? S.freason : null, p_password: sharePassword() });
+      S.judgeOpen = false; S.jbad = false; S.done = verdict === 'bad' ? 'ok-bad' : 'ok-judge';
+    } catch (e) {
+      S.error = /timeout/.test(e.message) ? '已经超过 5 分钟，按 AI 结果处理了' : '没提交上，稍后再试试';
+    }
+    S.busy = null;
+    await load();
+  }
+
   /* ---------- shell ---------- */
   function head(v, tabs) {
     const owner = v.owner || {};
@@ -1153,18 +1257,19 @@
   function render() {
     if (drag || G || TLG) return;
     const active = document.activeElement;
-    const keepFocus = active && (active.id === 'cheerText' || active.id === 'visitorName' || (active.id === 'pinIn' && active.value));
-    if (keepFocus) return;
+    // don't wipe a half-typed password; the sheet's own fields live outside the card
+    if (active && active.id === 'pinIn' && active.value) { renderModal(); return; }
     const key = S.data ? view().key : 'loading';
     const enter = last.tab !== S.tab || last.key !== key;
     $('#share').innerHTML = renderPage(enter);
+    renderModal();
     last = { tab: S.tab, key };
     placeIndicator();
     document.querySelectorAll('.scrub').forEach(el => paintScrub(el, S.scrub[el.dataset.sid], false));
     vpAfterRender();
     if (document.getElementById('tl')) tlScan(S.tlAt ?? null);
     if (enter && S.tab === 'review' && !reduce) countUp();
-    const inp = $('#visitorName') || $('#cheerText') || $('#pinIn'); if (inp && !inp.disabled) inp.focus();
+    const inp = $('#pinIn'); if (inp && !inp.disabled) inp.focus();
     if ($('.pin.bad')) S.gateShook = true;
   }
   function placeIndicator() {
@@ -1202,8 +1307,9 @@
   async function act(kind, payload) {
     S.busy = kind; S.error = ''; render();
     try {
-      await rpc('fg_friend_action', { p_code: code, p_visitor_key: visitorKey, p_visitor: S.visitor, p_kind: kind, p_payload: payload || {}, p_password: sharePassword() });
-      if (kind === 'cheer') { S.cheerOpen = false; S.cheerDraft = ''; }
+      const res = await rpc('fg_friend_action', { p_code: code, p_visitor_key: visitorKey, p_visitor: S.visitor, p_kind: kind, p_payload: payload || {}, p_password: sharePassword() });
+      if (kind === 'cheer') { S.cheerOpen = false; S.cheerDraft = ''; S.done = 'ok-cheer'; }
+      if (kind === 'check' && res && res.id) S.watch = res.id;
       if (kind === 'punish') S.pun = null;
     } catch (e) {
       S.error = friendlyError(e.message);
@@ -1232,6 +1338,10 @@
       const kind = S.asking; S.asking = null;
       $('#visitorName').blur();
       runAction(kind);
+    } else if (e.target.id === 'judgeForm') {
+      const v = ($('#judgeText').value || '').trim();
+      if (v) S.freason = v.slice(0, 30);
+      if (S.freason) { $('#judgeText').blur(); submitVerdict('bad'); }
     } else if (e.target.id === 'cheerForm') {
       const v = $('#cheerText').value.trim();
       if (!v) { $('#cheerText').focus(); return; }
@@ -1248,10 +1358,20 @@
       if (val.length === len) { e.target.blur(); S.gateShook = false; setPassword(val); viewCache = null; load(); }
       return;
     }
+    if (e.target.id === 'judgeText') {
+      if (e.target.value.trim()) { S.freason = e.target.value.trim(); document.querySelectorAll('[data-reason]').forEach(b => b.classList.remove('on')); }
+      const b = $('#judgeForm [type=submit]'); if (b) b.disabled = !S.freason;
+      return;
+    }
     if (e.target.id === 'cheerText') { S.cheerDraft = e.target.value; const c = $('#cheerCount'); if (c) c.textContent = `${e.target.value.length} / 60`; }
   });
   document.addEventListener('click', e => {
     const t = e.target;
+    if (t.closest('[data-mclose]') || (t.matches && t.matches('[data-mback]'))) { closeModal(); return; }
+    const jb = t.closest('[data-judge]');
+    if (jb) { const vj = jb.dataset.judge; if (vj === 'ok') submitVerdict('ok'); else { S.jbad = vj === 'bad'; S.error = ''; render(); } return; }
+    const rb = t.closest('[data-reason]');
+    if (rb) { S.freason = rb.dataset.reason; const ti = $('#judgeText'); if (ti) ti.value = ''; document.querySelectorAll('[data-reason]').forEach(b => b.classList.toggle('on', b === rb)); const sb = $('#judgeForm [type=submit]'); if (sb) sb.disabled = false; return; }
     const tab = t.closest('[data-tab]');
     if (tab) { S.tab = tab.dataset.tab; try { sessionStorage.setItem('fg-tab', S.tab); } catch (err) {} render(); return; }
     const jump = t.closest('[data-jump]');
@@ -1273,7 +1393,8 @@
     if (preset) { const ta = $('#cheerText'); ta.value = preset.dataset.preset; S.cheerDraft = ta.value; $('#cheerCount').textContent = `${ta.value.length} / 60`; ta.focus(); return; }
     const a = t.closest('[data-act]');
     if (a && !a.disabled) {
-      if (a.dataset.act === 'cheer-cancel') { S.cheerOpen = false; S.error = ''; $('#cheerText') && $('#cheerText').blur(); render(); return; }
+      if (a.dataset.act === 'cheer-cancel') { closeModal(); return; }
+      if (a.dataset.act === 'judge-open') { S.judgeOpen = true; S.jbad = false; S.freason = ''; render(); return; }
       if (!S.visitor) { S.asking = a.dataset.act; render(); return; }
       runAction(a.dataset.act);
     }
