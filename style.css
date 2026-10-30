@@ -449,3 +449,9 @@ button, input { font: inherit; color: inherit; }
 .thumb.cam img { filter: blur(1.5px); transform: scale(1.1); }
 .loading { padding: 64px 20px; text-align: center; color: var(--ink-3); font-size: 12.5px; }
 .err-line { font-size: 12px; color: var(--fail); }
+.act { position: relative; }
+.act-badge { position: absolute; top: 10px; right: 12px; font-size: 11px; line-height: 16px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.act-d.verse { font-style: italic; white-space: pre-line; line-height: 1.6; }
+@media (max-width: 480px) {
+  .stage { min-height: 100vh; min-height: 100svh; align-items: center; padding-block: 16px; }
+}

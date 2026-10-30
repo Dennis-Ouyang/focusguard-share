@@ -442,13 +442,13 @@
     const lastCheck = checks[checks.length - 1];
     const running = S.busy === 'check' || (lastCheck && lastCheck.status === 'pending' && nowMs() - ms(lastCheck.at) < 5 * 60000);
     const left = S.data.checks_left;
-    let checkDesc = '看看 TA 此刻在做什么，今天可查 2 次';
+    const who = ((v.owner && v.owner.nickname) || '').trim() || 'TA';
+    let checkDesc = `看看 ${esc(who)} 此刻在做什么？`;
     if (running) checkDesc = '截一张图，交给 AI 看看';
-    else if (lastCheck && lastCheck.status === 'done') checkDesc = left ? `结果在上面，今天还能再查 ${left} 次` : '结果在上面，今天的次数用完了';
-    else if (lastCheck && lastCheck.status === 'failed') checkDesc = left ? `这次没查成，今天还能再查 ${left} 次` : '这次没查成，今天的次数用完了';
-    else if (left < 2) checkDesc = left ? `今天还能再查 ${left} 次` : '今天的次数用完了';
+    else if (lastCheck && lastCheck.status === 'failed') checkDesc = '这次没查成，稍后再试试';
+    const badge = running ? '' : `<span class="act-badge">${left ? `可查 ${left} 次` : '今天已查完'}</span>`;
     const checkCard = canCheck ? `
-      <button class="act ${running ? 'busy' : ''}" data-act="check" ${running || !left ? 'disabled' : ''}>
+      <button class="act ${running ? 'busy' : ''}" data-act="check" ${running || !left ? 'disabled' : ''}>${badge}
         <span class="act-t">${running ? ICON.load : ICON.eye}${running ? '正在抽查' : '立即抽查'}</span>
         <span class="act-d">${checkDesc}</span>
       </button>` : '';
@@ -460,7 +460,7 @@
       <button class="act in" data-act="cheer" aria-live="polite"><span class="act-t">${ICON.check}已送达</span><span class="act-d sent-note"><q>${esc(lastCheer.payload && lastCheer.payload.text)}</q></span></button>` : `
       <button class="act" data-act="cheer">
         <span class="act-t">${ICON.spark}${cheerT}</span>
-        <span class="act-d">${key === 'empty' ? '轻轻推一把，今天的第一轮就开始了' : canCheck || key === 'pause' ? '写句话给 TA，本轮结束后送达' : '写句话给 TA'}</span>
+        <span class="act-d verse">${key === 'empty' ? '流水既一去不再回头，时光更不会为你停留。\n愿你一分一秒珍惜，如今要赶上正是时候。' : '也许一生到底 一切超出估计\n但是我总会找到你鼓励'}</span>
       </button>`;
     return `<section class="sec rule" aria-label="和伙伴互动">${head}
       <div class="acts" style="${canCheck ? '' : 'grid-template-columns:1fr'}">${checkCard}${cheerCard}</div>${err}
