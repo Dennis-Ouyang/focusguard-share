@@ -546,7 +546,8 @@
     } else if (!VD.marks.some(c => c.sec === VP.sel) && VD.focusSess.checks.length) {
       VP.sel = VD.focusSess.checks[VD.focusSess.checks.length - 1].sec;
     }
-    const c = nearestAll(VP.sel);
+    // a round without checks yet shows nothing under the pointer rather than an earlier round's last check
+    const c = marksOf(VD.focusSess).length ? nearestAll(VP.sel) : null;
     return `<div class="vp" id="vp" style="--c:${STATES[v.key].c}">
         <div class="vp-stage" id="vpStage">
           <canvas id="vpCanvas" height="64" aria-hidden="true"></canvas>
@@ -687,13 +688,16 @@
     if (!bubble) return;
     const cv = document.getElementById('vpCanvas'), spp = (VP.v1 - VP.v0) / (cv.clientWidth || 1);
     const snapped = c && Math.abs(c.sec - sec) / spp < 7;
-    bubble.textContent = hhmm(free ? sec : c ? c.sec : sec);
-    bubble.className = 'bubble' + (snapped && c.patrol ? ' patrol' : snapped && !c.ok ? ' fail' : snapped && c.friend ? ' friend' : '');
+    bubble.textContent = hhmm(free || !snapped ? sec : c.sec);
+    bubble.className = 'bubble' + (snapped && c && c.patrol ? ' patrol' : snapped && !c.ok ? ' fail' : snapped && c.friend ? ' friend' : '');
     head.setAttribute('aria-valuetext', `${hhmm(sec)}${c ? (c.patrol ? ' 实时巡查' : c.ok ? ' 合格' : ' 不合格') : ''}`);
     const slot = document.getElementById('vpSlot');
-    if (slot && c && slot.dataset.cid !== c.id) {
-      slot.dataset.cid = c.id;
-      slot.innerHTML = vpSlotHTML(c);
+    // only describe a check the pointer actually rests on (or is being dragged near)
+    const shown = c && (free || snapped) ? c : null;
+    if (slot && !shown && slot.dataset.cid) { slot.dataset.cid = ''; slot.innerHTML = ''; }
+    if (slot && shown && slot.dataset.cid !== shown.id) {
+      slot.dataset.cid = shown.id;
+      slot.innerHTML = vpSlotHTML(shown);
       [...slot.children].forEach(ch => { ch.classList.remove('in'); void ch.offsetWidth; ch.classList.add('in'); });
     }
     vpDraw();
