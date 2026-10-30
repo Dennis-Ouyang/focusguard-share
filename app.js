@@ -172,6 +172,7 @@
   }
   const toPatrols = list => (list || []).map(p => ({ id: p.id, sec: Math.round(ms(p.at) / 1000), patrol: true, ok: true,
     target: p.target || '', why: p.why || '', ban: p.ban || 0, screen: p.screen })).filter(p => !isNaN(p.sec));
+  const toPauses = list => (list || []).map(([a, b]) => [ms(a) / 1000, ms(b) / 1000]).filter(([a, b]) => b > a);
   const marksOf = sess => sess.checks.concat(sess.patrols || []).sort((a, b) => a.sec - b.sec);
   let viewCache = null;
   function view() {
@@ -200,7 +201,7 @@
     (snap.fails || []).forEach(f => { fails[f.id] = { ...f, sec: Math.round(ms(f.at) / 1000) }; });
     const sessions = (snap.sessions || []).map(x => ({
       id: x.id, task: x.task, s: ms(x.start), e: ms(x.end), minutes: x.minutes, done: !!x.done, failLimit: x.failLimit || 4,
-      checks: toChecks(x.checks, fails), patrols: toPatrols(x.patrols)
+      checks: toChecks(x.checks, fails), patrols: toPatrols(x.patrols), pauses: toPauses(x.pauses)
     })).filter(x => !isNaN(x.s) && !isNaN(x.e));
     const upd = ms(d.snapshot_at) || ms(snap.generatedAt);
     let key = snap.state;
@@ -220,7 +221,7 @@
       current = {
         id: c.id || 'cur', task: c.task, s, e: at, at: Math.round(at / 1000), plan: c.planMin, failLimit: c.failLimit || 4,
         elapsedMin: Math.floor(elapsedSec / 60),
-        patrols: toPatrols(c.patrols),
+        patrols: toPatrols(c.patrols), pauses: toPauses(c.pauses),
         kind: key === 'offline' ? 'stale' : key === 'pause' ? 'paused' : 'live',
         checks: toChecks(c.checks, fails)
       };
@@ -314,7 +315,7 @@
      the slots around it stretch by exactly that extra width, so every gap on the rail stays the same.
      Time ↔ x is then piecewise linear through the slots, and the playhead follows the same map. */
   const SCR = {};
-  const SC_TICK = 1.5, SC_CHECK = 3.5;
+  const SC_TICK = 1.5, SC_CHECK = 3.5, SC_PITCH = 5;
   function scrubHTML(sess, live, v) {
     const sid = sess.id;
     const start = Math.floor(sess.s / 1000);
@@ -361,11 +362,13 @@
     el._w = W;
     const { start, end, reached, sess } = cfg, span = end - start;
     const ts = [];
-    for (let t = Math.ceil(start / 30) * 30; t <= end; t += 30) ts.push(t);
-    if (ts.length < 2) ts.push(ts[0] + 30);
+    // fixed on-screen density: one tick every SC_PITCH px whatever the round's length, so every round reads alike
+    const count = Math.max(2, Math.floor(W / SC_PITCH) + 1), step = span / (count - 1);
+    for (let j = 0; j < count; j++) ts.push(start + j * step);
+    cfg.step = step;
     const own = new Array(ts.length).fill(null);
     sess.checks.forEach(c => {
-      const j = Math.min(ts.length - 1, Math.max(0, Math.round((c.sec - ts[0]) / 30)));
+      const j = Math.min(ts.length - 1, Math.max(0, Math.round((c.sec - ts[0]) / step)));
       if (!own[j] || rankCheck(c) > rankCheck(own[j])) own[j] = c;
     });
     const x0 = (ts[0] - start) / span * W, xN = (ts[ts.length - 1] - start) / span * W;
@@ -387,7 +390,8 @@
         i.dataset.sec = c.sec;
         i.dataset.h = !c.ok && !c.fail.excused || c.friend ? 18 : 15;
       } else {
-        i.className = `mt ${t > reached ? 'future' : ''}`;
+        const paused = (sess.pauses || []).some(([a, b]) => t >= a && t <= b);
+        i.className = `mt ${t > reached ? 'future' : ''} ${paused ? 'paused' : ''}`;
         i.dataset.sec = t; i.dataset.h = 10;
       }
       i.dataset.x = xs[j];
@@ -405,15 +409,15 @@
     const { ts, xs, W } = cfg, span = cfg.end - cfg.start;
     if (sec <= ts[0]) return (sec - cfg.start) / span * W;
     if (sec >= ts[ts.length - 1]) return xs[xs.length - 1] + (sec - ts[ts.length - 1]) / span * W;
-    const j = Math.min(ts.length - 2, Math.floor((sec - ts[0]) / 30));
-    return xs[j] + (xs[j + 1] - xs[j]) * (sec - ts[j]) / 30;
+    const j = Math.min(ts.length - 2, Math.floor((sec - ts[0]) / cfg.step));
+    return xs[j] + (xs[j + 1] - xs[j]) * (sec - ts[j]) / cfg.step;
   }
   function scrubSec(cfg, x) {
     const { ts, xs, W } = cfg, span = cfg.end - cfg.start;
     if (x <= xs[0]) return cfg.start + x / W * span;
     if (x >= xs[xs.length - 1]) return ts[ts.length - 1] + (x - xs[xs.length - 1]) / W * span;
     let j = 0; while (j < xs.length - 2 && xs[j + 1] < x) j++;
-    return ts[j] + 30 * (x - xs[j]) / (xs[j + 1] - xs[j]);
+    return ts[j] + cfg.step * (x - xs[j]) / (xs[j + 1] - xs[j]);
   }
   function paintScrub(el, sec, dragging) {
     const sid = el.dataset.sid, cfg = SCR[sid];
@@ -499,6 +503,7 @@
     const { key, sessions, current } = v;
     const nowSec = Math.floor(nowMs() / 1000);
     const spans = sessions.map(x => ({ s: x.s / 1000, e: x.e / 1000, k: x.done ? 'done' : 'cut' }));
+    sessions.concat(current ? [current] : []).forEach(x => (x.pauses || []).forEach(([a, b]) => spans.push({ s: a, e: b, k: 'paused' })));
     const checks = [];
     sessions.forEach(x => x.checks.forEach(c => { c.sess = x; checks.push(c); }));
     let start, projEnd, focusSess = current, at = null;
@@ -515,6 +520,7 @@
       start = focusSess.s / 1000; projEnd = focusSess.e / 1000;
     }
     checks.sort((a, b) => a.sec - b.sec);
+    spans.sort((a, b) => (a.k === 'paused') - (b.k === 'paused'));  // pauses win over the round they sit in
     const patrols = sessions.concat(current ? [current] : []).flatMap(x => (x.patrols || []).map(p => Object.assign(p, { sess: x })));
     const marks = checks.concat(patrols).sort((a, b) => a.sec - b.sec);
     return { key, spans, checks, patrols, marks, start, projEnd, nowSec, at, current, focusSess, day0: v.dayStart / 1000, day1: v.dayEnd / 1000,
@@ -1045,7 +1051,7 @@
           <button class="row" data-open="${esc(x.id)}" aria-expanded="${open}">
             <span class="t">${hhmmMs(x.s)}–${isCur ? '' : hhmmMs(x.e)}</span>${cell(x.task)}
             <span class="q ${nf ? 'bad' : ''}">${nf ? `不合格 ${nf}` : `抽查 ${x.checks.length}`}</span>
-            <span class="d">${isCur ? curMin : x.minutes} 分钟</span>
+            <span class="d">${Math.max(1, Math.round(((isCur ? nowMs() : x.e) - x.s) / 60000))} 分钟</span>
             <span class="s">${isCur ? `<span class="dot ${current.kind === 'live' ? 'live' : ''}" style="--c:${current.kind === 'stale' ? 'var(--mute)' : st.c}"></span>` : x.done ? ICON.check : ICON.minus}</span>
           </button>
           ${open ? `<div class="more">${scrubHTML(x, false, v)}</div>` : ''}
