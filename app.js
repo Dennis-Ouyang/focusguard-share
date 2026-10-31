@@ -10,6 +10,7 @@
     eye: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M1.8 8S4 3.8 8 3.8 14.2 8 14.2 8 12 12.2 8 12.2 1.8 8 1.8 8Z"/><circle cx="8" cy="8" r="2"/></svg>',
     spark: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.2v2.6M8 11.2v2.6M2.2 8h2.6M11.2 8h2.6M4 4l1.7 1.7M10.3 10.3 12 12M4 12l1.7-1.7M10.3 5.7 12 4"/></svg>',
     load: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 2.2a5.8 5.8 0 1 1-5.8 5.8"/></svg>',
+    lockSolid: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2.5a5 5 0 0 0-5 5V10h-.5A2.5 2.5 0 0 0 4 12.5v7A2.5 2.5 0 0 0 6.5 22h11a2.5 2.5 0 0 0 2.5-2.5v-7a2.5 2.5 0 0 0-2.5-2.5H17V7.5a5 5 0 0 0-5-5Zm-3 5a3 3 0 1 1 6 0V10H9V7.5Z"/></svg>',
     x: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/></svg>',
     hidden: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M2.5 2.5l11 11M6.4 4.1A6.6 6.6 0 0 1 8 3.8c4 0 6.2 4.2 6.2 4.2a10 10 0 0 1-1.6 2.1M4.2 5.4C2.7 6.6 1.8 8 1.8 8s2.2 4.2 6.2 4.2c.9 0 1.7-.2 2.4-.5"/></svg>'
   };
@@ -129,8 +130,11 @@
     clearTimeout(pollTimer);
     if (document.hidden) return;
     const pending = mine().some(a => a.status === 'pending' || a.status === 'judging');
-    const live = ['focus', 'pause', 'rest'].includes(view().key);
-    pollTimer = setTimeout(load, pending ? 8000 : live ? 60000 : 180000);
+    const cur = view();
+    const live = ['focus', 'pause', 'rest'].includes(cur.key);
+    // a ban lifts itself: come back right after it ends
+    const wait = cur.key === 'banned' && cur.until ? Math.max(2000, Math.min(180000, cur.until - nowMs() + 1500)) : pending ? 8000 : live ? 60000 : 180000;
+    pollTimer = setTimeout(load, wait);
   }
   document.addEventListener('visibilitychange', () => { if (!document.hidden) load(); else clearTimeout(pollTimer); });
 
@@ -188,6 +192,7 @@
     if (!d) return { key: 'loading' };
     if (d.status === 'missing') return { key: 'missing', owner: {} };
     if (d.status === 'expired') return { key: 'ended', owner: d.owner || {}, once: d.scope === 'once' };
+    if (d.status === 'banned') return { key: 'banned', owner: d.owner || {}, once: d.scope === 'once', until: ms(d.until) };
     if (d.status === 'locked') return { key: 'locked', owner: d.owner || {}, once: d.scope === 'once', pwLen: d.pw_len || 4,
       lockedUntil: ms(d.locked_until), wrong: !!d.wrong };
     const snap = d.snapshot;
@@ -1222,6 +1227,11 @@
     const v = view();
     if (v.key === 'ended') return ended(v, v.once ? '这一轮专注已经结束，分享链接已失效。' : '此分享链接已过期，请向你的伙伴重新获取。', enter);
     if (v.key === 'locked') return gate(v, enter);
+    if (v.key === 'banned') {
+      return `<article class="card">${head(v, false)}<div class="ended banned ${enter ? 'enter' : ''}"><span class="ban-lock">${ICON.lockSolid}</span>
+        <h2 class="ban-h">伙伴暂时关上了这扇门</h2>
+        <p>你的访问已被暂停。<br>恢复时间为 ${hhmmMs(v.until)}。</p></div></article>`;
+    }
     if (v.key === 'missing') return ended(v, '没有找到这个分享，请向你的伙伴重新获取。', enter);
     document.title = `${(v.owner.nickname || '').trim() || '伙伴'}${v.once ? '的这一轮专注' : '今天的专注'}`;
     const tab = v.once ? 'now' : S.tab;
@@ -1301,7 +1311,8 @@
     'fg: share unavailable': '这个分享已经失效了。',
     'fg: cheer limit': '今天的话已经说得够多啦。',
     'fg: punish limit': '今天的提议已经够多啦。',
-    'fg: punish pending': '上一个提议还在等 TA 回应。'
+    'fg: punish pending': '上一个提议还在等 TA 回应。',
+    'fg: banned': '你的访问已被暂停。'
   }[(m || '').trim()] || '没发出去，稍后再试试。');
 
   async function act(kind, payload) {

@@ -645,3 +645,14 @@ button, input { font: inherit; color: inherit; }
 /* live page: no preview dock below the sheet */
 .m-layer { padding-bottom: 20px; }
 @media (max-width: 480px) { .m-layer { padding: 0; } .m-body { padding-bottom: calc(22px + env(safe-area-inset-bottom, 0px)); } }
+
+/* banned: a solid dark-red lock, everything centred */
+:root { --danger: #9E2A2B; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --danger: #B8403C; } }
+:root[data-theme="dark"] { --danger: #B8403C; }
+.ended.banned { justify-items: center; align-content: center; text-align: center; gap: 10px; }
+.ended.banned > * { justify-self: center; text-align: center; }
+.ban-lock { display: grid; place-items: center; width: 34px; height: 34px; color: var(--danger); margin-bottom: 4px; }
+.ban-lock svg { width: 34px; height: 34px; display: block; }
+.ended.banned .ban-h { margin: 0; font-family: var(--sans); font-size: 18px; letter-spacing: 0; font-weight: 600; line-height: 1.4; }
+.ended.banned p { line-height: 1.7; }
