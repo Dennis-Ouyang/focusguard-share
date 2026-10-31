@@ -1246,7 +1246,7 @@
       </form></article>`;
   }
   function ended(v, text, enter) {
-    return `<article class="card">${head(v, false)}<div class="ended ${enter ? 'enter' : ''}"><h2><span>无可奈何花落去，</span><span>似曾相识燕归来。</span></h2>
+    return `<article class="card">${head(v, false)}<div class="ended ${enter ? 'enter' : ''}"><h2><span>何当共剪西窗烛，</span><span>却话巴山夜雨时。</span></h2>
       <p>${esc(text)}</p></div></article>`;
   }
 
