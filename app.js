@@ -282,6 +282,13 @@
     const pun = PUNS.find(x => x.k === p.type);
     return pun ? `${pun.label({ target: p.target })} ${p.amount} ${pun.unit}` : '追加惩罚';
   };
+  const PUN_TAKEN = ['pending', 'approved', 'done'];
+  // 服务器给出的 punished 覆盖所有伙伴；旧版服务器没有这个字段时退回到“朋友来访”记录里找
+  function takenPunish(failId) {
+    const d = S.data || {};
+    const list = Array.isArray(d.punished) ? d.punished : (d.visits || []).filter(a => a.kind === 'punish');
+    return list.filter(a => a.payload && a.payload.fail_id === failId && PUN_TAKEN.includes(a.status)).pop() || null;
+  }
   function proposeBlock(f) {
     const sent = mine().filter(a => a.kind === 'punish' && a.payload && a.payload.fail_id === f.id).pop();
     if (sent) {
@@ -295,6 +302,13 @@
       };
       const [c, txt, live] = map[sent.status] || map.pending;
       return `<div class="propose in"><div class="status-line"><span class="dot ${live ? 'live' : ''}" style="--c:${c}"></span>${esc(txt)}</div></div>`;
+    }
+    // 已有其他伙伴为这次违规追加了惩罚（还在等回应或已生效），就不再给其他人追加的选项
+    const taken = takenPunish(f.id);
+    if (taken) {
+      const who = taken.visitor ? `${taken.visitor}已` : '已有伙伴';
+      const txt = taken.status === 'pending' ? `${who}提议追加惩罚：${punText(taken.payload || {})}，正在等 TA 回应。` : `${who}追加了惩罚：${punText(taken.payload || {})}，已生效。`;
+      return `<div class="propose in"><div class="status-line"><span class="dot" style="--c:var(--mute)"></span>${esc(txt)}</div></div>`;
     }
     return `<div class="propose" data-fail="${esc(f.id)}">
       <div class="propose-head"><span class="propose-title">追加惩罚</span><span class="propose-sub">你仍可以追加以下惩罚。</span></div>
@@ -1312,6 +1326,7 @@
     'fg: cheer limit': '今天的话已经说得够多啦。',
     'fg: punish limit': '今天的提议已经够多啦。',
     'fg: punish pending': '上一个提议还在等 TA 回应。',
+    'fg: punish taken': '已经有伙伴为这次违规追加过惩罚了。',
     'fg: banned': '你的访问已被暂停。'
   }[(m || '').trim()] || '没发出去，稍后再试试。');
 
