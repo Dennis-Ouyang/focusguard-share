@@ -656,3 +656,19 @@ button, input { font: inherit; color: inherit; }
 .ban-lock svg { width: 34px; height: 34px; display: block; }
 .ended.banned .ban-h { margin: 0; font-family: var(--sans); font-size: 18px; letter-spacing: 0; font-weight: 600; line-height: 1.4; }
 .ended.banned p { line-height: 1.7; }
+
+/* ---------- v20: phone keyboard ----------
+   --vv-top / --vv-h / --kb come from visualViewport (app.js). While the keyboard is up the sheet
+   sits in the part of the screen still visible, resting just above the keyboard. */
+.kb-open .m-layer { top: var(--vv-top, 0px); bottom: auto; height: var(--vv-h, 100%); padding: 12px; }
+.kb-open .m-card { max-height: calc(var(--vv-h, 100vh) - 24px); overscroll-behavior: contain; }
+@media (max-width: 480px) {
+  /* phone: the bottom sheet rests on the keyboard's top edge; no home-indicator inset while it's up */
+  .kb-open .m-layer { padding: 0; }
+  .kb-open .m-card { max-height: calc(var(--vv-h, 100vh) - 12px); padding-bottom: 0; }
+  .kb-open .m-body { padding-bottom: 16px; }
+}
+/* below 16px iOS zooms the page on focus, which knocks the sheet out of place */
+@media (pointer: coarse) {
+  .m-form input, .composer textarea, .judge-why input, .who-ask input { font-size: 16px; }
+}

@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 800" font-family="Menlo,'SF Mono',monospace">
+<rect width="1600" height="800" fill="#1E1F22"/>
+<rect width="1600" height="34" fill="#2B2D30"/><circle cx="24" cy="17" r="7" fill="#FF5F57"/><circle cx="46" cy="17" r="7" fill="#FEBC2E"/><circle cx="68" cy="17" r="7" fill="#28C840"/>
+<text x="800" y="23" text-anchor="middle" font-size="15" fill="#9DA0A6" font-family="-apple-system,'PingFang SC',sans-serif">bitree.c — 数据结构</text>
+<rect x="0" y="34" width="240" height="766" fill="#232427"/>
+<g font-size="16" fill="#8C8F96"><text x="24" y="80">▾ ds-review</text><text x="44" y="112">linklist.c</text><text x="44" y="144" fill="#E6E6E6">bitree.c</text><text x="44" y="176">graph.c</text><text x="44" y="208">notes.md</text></g>
+<g font-size="20">
+<text x="280" y="90" fill="#6F737A">1</text><text x="330" y="90" fill="#CF8E6D">typedef struct</text><text x="510" y="90" fill="#E6E6E6">BiTNode {</text>
+<text x="280" y="128" fill="#6F737A">2</text><text x="370" y="128" fill="#CF8E6D">int</text><text x="420" y="128" fill="#E6E6E6">data;</text>
+<text x="280" y="166" fill="#6F737A">3</text><text x="370" y="166" fill="#CF8E6D">struct</text><text x="450" y="166" fill="#E6E6E6">BiTNode *lchild, *rchild;</text>
+<text x="280" y="204" fill="#6F737A">4</text><text x="330" y="204" fill="#E6E6E6">} BiTNode, *BiTree;</text>
+<text x="280" y="280" fill="#6F737A">6</text><text x="330" y="280" fill="#7A7E85">// 中序遍历（非递归）</text>
+<text x="280" y="318" fill="#6F737A">7</text><text x="330" y="318" fill="#CF8E6D">void</text><text x="390" y="318" fill="#56A8F5">InOrder</text><text x="480" y="318" fill="#E6E6E6">(BiTree T) {</text>
+<text x="280" y="356" fill="#6F737A">8</text><text x="370" y="356" fill="#E6E6E6">Stack S; InitStack(&amp;S);</text>
+<text x="280" y="394" fill="#6F737A">9</text><text x="370" y="394" fill="#E6E6E6">BiTree p = T;</text>
+<text x="280" y="432" fill="#6F737A">10</text><text x="370" y="432" fill="#CF8E6D">while</text><text x="440" y="432" fill="#E6E6E6">(p || !StackEmpty(S)) {</text>
+<text x="280" y="470" fill="#6F737A">11</text><text x="410" y="470" fill="#CF8E6D">if</text><text x="440" y="470" fill="#E6E6E6">(p) { Push(&amp;S, p); p = p-&gt;lchild; }</text>
+<text x="280" y="508" fill="#6F737A">12</text><text x="410" y="508" fill="#CF8E6D">else</text><text x="470" y="508" fill="#E6E6E6">{ Pop(&amp;S, &amp;p); visit(p); p = p-&gt;rchild; }</text>
+<text x="280" y="546" fill="#6F737A">13</text><text x="370" y="546" fill="#E6E6E6">}</text>
+<text x="280" y="584" fill="#6F737A">14</text><text x="330" y="584" fill="#E6E6E6">}</text>
+</g>
+<rect x="330" y="568" width="2" height="22" fill="#E6E6E6"/>
+</svg>

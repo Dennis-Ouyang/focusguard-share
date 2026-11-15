@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 800" font-family="-apple-system,'PingFang SC','Noto Sans SC',sans-serif">
+<rect width="1600" height="800" fill="#ECECEE"/>
+<rect width="1600" height="34" fill="#F6F6F7"/><circle cx="24" cy="17" r="7" fill="#FF5F57"/><circle cx="46" cy="17" r="7" fill="#FEBC2E"/><circle cx="68" cy="17" r="7" fill="#28C840"/>
+<text x="800" y="23" text-anchor="middle" font-size="15" fill="#555">预览 — 高等数学 第五章 定积分.pdf</text>
+<rect x="60" y="60" width="760" height="720" rx="4" fill="#fff"/>
+<text x="110" y="130" font-size="30" font-weight="600" fill="#222">§5.3 定积分的换元法</text>
+<g fill="#C9C9CE"><rect x="110" y="170" width="640" height="12" rx="6"/><rect x="110" y="200" width="600" height="12" rx="6"/><rect x="110" y="230" width="660" height="12" rx="6"/><rect x="110" y="260" width="420" height="12" rx="6"/></g>
+<text x="150" y="340" font-size="30" fill="#333" font-style="italic">∫ₐᵇ f(x) dx = ∫ᵅᵝ f(φ(t)) φ′(t) dt</text>
+<g fill="#C9C9CE"><rect x="110" y="400" width="620" height="12" rx="6"/><rect x="110" y="430" width="660" height="12" rx="6"/><rect x="110" y="460" width="520" height="12" rx="6"/><rect x="110" y="520" width="640" height="12" rx="6"/><rect x="110" y="550" width="580" height="12" rx="6"/><rect x="110" y="580" width="300" height="12" rx="6"/></g>
+<rect x="860" y="60" width="680" height="720" rx="4" fill="#FFFDF5"/>
+<text x="900" y="120" font-size="24" fill="#3A3A3A">习题 5-3  第 1 题</text>
+<path d="M900 180c60-10 120 8 180-4s120-6 200 2M900 240c80-6 160 6 240-2M900 300c70 4 150-8 220 0s100 2 160-2M900 380c90-8 180 4 280-2M900 440c60 6 140-6 200 0M900 520c80-4 170 6 260-2" stroke="#2F4A7A" stroke-width="3" fill="none" stroke-linecap="round"/>
+</svg>

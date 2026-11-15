@@ -63,6 +63,8 @@
     if (m) return m[1];
     return new URLSearchParams(location.search).get('s') || '';
   })();
+  // 演示链接 #/s/demo：数据由 demo.js 在本页生成，不连接后端
+  const DEMO = code === 'demo' && window.FG_DEMO ? window.FG_DEMO : null;
 
   /* ---------- time ---------- */
   let skew = 0, TZ = undefined;
@@ -92,6 +94,7 @@
 
   /* ---------- backend ---------- */
   async function rpc(fn, args) {
+    if (DEMO) return DEMO.rpc(fn, args);
     const r = await fetch(`${CFG.url}/rest/v1/rpc/${fn}`, {
       method: 'POST', cache: 'no-store',
       headers: { apikey: CFG.anonKey, 'Content-Type': 'application/json' },
@@ -1227,7 +1230,7 @@
     const date = v.once && v.roundStart ? `${mdhm(v.roundStart).replace(' ', ' ')} 开始` : v.dayStart ? dayLabel(v.dayStart) : dayLabel(nowMs());
     return `<header class="head">
         <div class="head-id">${avatar ? `<img class="avatar" src="${esc(avatar)}" alt="" referrerpolicy="no-referrer">` : ''}
-          <div class="head-title"><h1>${esc(name)}${v.once ? '的这一轮专注' : '今天的专注'}</h1><span class="head-date">${date}</span></div></div>
+          <div class="head-title"><h1>${esc(name)}${v.once ? '的这一轮专注' : '今天的专注'}</h1><span class="head-date">${date}${DEMO ? ' · 示例数据' : ''}</span></div></div>
         ${tabs ? `<div class="tabs" role="tablist">
           <button class="tab" role="tab" data-tab="now" aria-selected="${S.tab === 'now'}">现在</button>
           <button class="tab" role="tab" data-tab="review" aria-selected="${S.tab === 'review'}">今日回顾</button><span class="tab-ind" aria-hidden="true"></span></div>` : ''}
@@ -1427,8 +1430,46 @@
   });
   window.addEventListener('resize', () => document.querySelectorAll('.scrub').forEach(el => { el._w = 0; paintScrub(el, S.scrub[el.dataset.sid], false); }));
   window.addEventListener('hashchange', () => location.reload());
+  /* ---------- phone keyboard ----------
+     Mobile keyboards cover the bottom of the screen without resizing the layout (iOS always, Android Chrome by default).
+     visualViewport reports the part still visible: pin the sheet to it and lift page fields above the keyboard. */
+  const VV = window.visualViewport;
+  const isField = el => el && (el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && !['radio', 'checkbox', 'button', 'submit'].includes(el.type)));
+  function liftField() {
+    const el = document.activeElement;
+    if (!VV || !isField(el)) return;
+    if (el.closest('.m-layer')) { el.scrollIntoView({ block: 'nearest' }); return; }
+    // keep the whole field group (e.g. the PIN cells) in sight, a little above the keyboard
+    const box = (el.closest('.pin, form, .who-ask') || el).getBoundingClientRect();
+    const top = VV.offsetTop + 12, bottom = VV.offsetTop + VV.height - 16;
+    const dy = box.bottom > bottom ? box.bottom - bottom : box.top < top ? box.top - top : 0;
+    if (Math.abs(dy) > 1) window.scrollBy({ top: dy, behavior: reduce ? 'auto' : 'smooth' });
+  }
+  let kbRAF = 0, kbLift = 0;
+  function syncViewport() {
+    kbRAF = 0;
+    if (!VV) return;
+    const root = document.documentElement;
+    const kb = Math.max(0, Math.round(window.innerHeight - VV.height - VV.offsetTop));
+    const open = kb > 80 && isField(document.activeElement);
+    root.style.setProperty('--vv-top', VV.offsetTop.toFixed(1) + 'px');
+    root.style.setProperty('--vv-h', VV.height.toFixed(1) + 'px');
+    root.style.setProperty('--kb', (open ? kb : 0) + 'px');
+    root.classList.toggle('kb-open', open);
+    clearTimeout(kbLift);
+    if (open) kbLift = setTimeout(liftField, 60);
+  }
+  const queueViewport = () => { if (!kbRAF) kbRAF = requestAnimationFrame(syncViewport); };
+  if (VV) {
+    VV.addEventListener('resize', queueViewport);
+    VV.addEventListener('scroll', queueViewport);
+    document.addEventListener('focusin', e => { if (isField(e.target)) { queueViewport(); setTimeout(queueViewport, 350); } });
+    document.addEventListener('focusout', () => setTimeout(queueViewport, 50));
+    syncViewport();
+  }
   setInterval(() => { if (!document.hidden) render(); }, 30000);
 
+  if (DEMO) DEMO.onChange = () => load();
   render();
   if (CFG.url && CFG.anonKey && code) load();
 })();

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 800" font-family="-apple-system,'PingFang SC','Noto Sans SC',sans-serif">
+<rect width="1600" height="800" fill="#F4F5F7"/>
+<rect width="1600" height="34" fill="#E3E4E8"/><circle cx="24" cy="17" r="7" fill="#FF5F57"/><circle cx="46" cy="17" r="7" fill="#FEBC2E"/><circle cx="68" cy="17" r="7" fill="#28C840"/>
+<rect x="420" y="7" width="760" height="20" rx="6" fill="#fff"/><text x="800" y="22" text-anchor="middle" font-size="13" fill="#666">www.bilibili.com/video/…</text>
+<rect x="60" y="70" width="1040" height="585" rx="10" fill="#15171C"/>
+<path d="M0 0" /><circle cx="580" cy="362" r="54" fill="rgba(255,255,255,.18)"/><path d="M562 334v56l46-28z" fill="#fff"/>
+<rect x="90" y="620" width="980" height="5" rx="2.5" fill="#3A3D45"/><rect x="90" y="620" width="410" height="5" rx="2.5" fill="#FB7299"/>
+<text x="60" y="705" font-size="28" font-weight="600" fill="#18191C">【猫】主子今天又把杯子推下桌了</text>
+<text x="60" y="745" font-size="18" fill="#9499A0">128.4 万播放 · 2.1 万弹幕</text>
+<g><rect x="1140" y="70" width="400" height="120" rx="8" fill="#E3E5E9"/><rect x="1140" y="210" width="400" height="120" rx="8" fill="#E3E5E9"/><rect x="1140" y="350" width="400" height="120" rx="8" fill="#E3E5E9"/><rect x="1140" y="490" width="400" height="120" rx="8" fill="#E3E5E9"/></g>
+</svg>
